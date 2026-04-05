@@ -1682,25 +1682,295 @@ local function SetupBrokenTracking()
 end
 SetupBrokenTracking()
 
+AutoClaimAllowanceCoolDown = AutoClaimAllowanceCoolDown or false
+ATMUsage = ATMUsage or {}
+FarmPriority = FarmPriority or {}
+FarmPriority.AllowanceActive = FarmPriority.AllowanceActive or false
+
+local function WaitForCharacter()
+    while not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") do
+        task.wait(0.1)
+    end
+
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    return character, hrp
+end
+
+local function FindATMPartInside(instance)
+    if not instance then
+        return nil
+    end
+
+    if instance:IsA("BasePart") and instance.Name == "MainPart" then
+        return instance
+    end
+
+    if instance:IsA("Model") then
+        local directMainPart = instance:FindFirstChild("MainPart")
+        if directMainPart and directMainPart:IsA("BasePart") then
+            return directMainPart
+        end
+
+        if instance.PrimaryPart and instance.PrimaryPart:IsA("BasePart") then
+            return instance.PrimaryPart
+        end
+    end
+
+    for _, descendant in ipairs(instance:GetDescendants()) do
+        if descendant:IsA("BasePart") and descendant.Name == "MainPart" then
+            return descendant
+        end
+    end
+
+    if instance:IsA("Model") then
+        for _, descendant in ipairs(instance:GetDescendants()) do
+            if descendant:IsA("Model") and descendant.PrimaryPart and descendant.PrimaryPart:IsA("BasePart") then
+                return descendant.PrimaryPart
+            end
+        end
+    end
+
+    return nil
+end
+
+local function GetATM()
+    local _, hrp = WaitForCharacter()
+    if not hrp then
+        Log("GetATM: no HRP")
+        return nil, math.huge
+    end
+
+    local map = Workspace:FindFirstChild("Map")
+    if not map then
+        Log("GetATM: Map missing")
+        return nil, math.huge
+    end
+
+    local atmFolder = map:FindFirstChild("ATMz")
+    if not atmFolder then
+        Log("GetATM: ATMz folder missing")
+        return nil, math.huge
+    end
+
+    local closestATM = nil
+    local minDistance = math.huge
+
+    for _, child in ipairs(atmFolder:GetChildren()) do
+        local mainPart = FindATMPartInside(child)
+
+        if mainPart and mainPart:IsA("BasePart") then
+            local usageCount = ATMUsage[mainPart] or 0
+            if usageCount < 999 then
+                local atmDistance = (hrp.Position - mainPart.Position).Magnitude
+                if atmDistance < minDistance then
+                    minDistance = atmDistance
+                    closestATM = mainPart
+                end
+            end
+        end
+    end
+
+    if closestATM then
+        Log("GetATM: selected " .. closestATM:GetFullName())
+    else
+        Log("GetATM: no valid ATM found")
+    end
+
+    return closestATM, minDistance
+end
+
+local function Drop10Cash()
+    local ok = pcall(function()
+        ReplicatedStorage.Events.DCZSH:InvokeServer(10)
+    end)
+
+    if ok then
+        Log("Dropped 10 cash")
+    else
+        Log("Failed to drop 10 cash")
+    end
+
+    task.wait(0.35)
+    return ok
+end
+
+local function ClaimAllowanceAtATM(targetATM)
+    local ok = pcall(function()
+        ReplicatedStorage.Events.CLMZALOW:InvokeServer(targetATM)
+    end)
+
+    if ok then
+        Log("Allowance claimed")
+    else
+        Log("Failed to claim allowance")
+    end
+
+    task.wait(0.6)
+    return ok
+end
+
+local function DepositCashAtATM(targetATM, amount)
+    local ok = pcall(function()
+        ReplicatedStorage.Events.ATM:InvokeServer("DP", amount, targetATM)
+    end)
+
+    if ok then
+        Log("Deposited cash: " .. tostring(amount))
+    else
+        Log("Failed to deposit cash: " .. tostring(amount))
+    end
+
+    task.wait(0.45)
+    return ok
+end
+
+local function ProcessAllowanceIfReady()
+    local _, hrp = WaitForCharacter()
+    if not hrp then
+        return
+    end
+
+    local playerDataFolder = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+    if not playerDataFolder then
+        Log("Allowance: PlayerbaseData2 missing")
+        return
+    end
+
+    local cashData = playerDataFolder:FindFirstChild(LocalPlayer.Name)
+    if not cashData then
+        Log("Allowance: cashData missing")
+        return
+    end
+
+    local nextAllowance = cashData:FindFirstChild("NextAllowance")
+
+    if nextAllowance and nextAllowance.Value == 0 and not AutoClaimAllowanceCoolDown then
+        FarmPriority.AllowanceActive = true
+        AutoClaimAllowanceCoolDown = true
+
+        Log("Allowance ready, starting ATM logic")
+
+        local targetATM = GetATM()
+        if not targetATM then
+            Log("Allowance ready but no ATM found")
+            AutoClaimAllowanceCoolDown = false
+            FarmPriority.AllowanceActive = false
+            return
+        end
+
+        Log("Using ATM: " .. targetATM:GetFullName())
+
+        if typeof(MoveToTarget) ~= "function" then
+            Log("MoveToTarget is nil or not a function")
+            AutoClaimAllowanceCoolDown = false
+            FarmPriority.AllowanceActive = false
+            return
+        end
+
+        local movedToATM = MoveToTarget(targetATM)
+        if not movedToATM then
+            Log("Failed to reach ATM")
+            AutoClaimAllowanceCoolDown = false
+            FarmPriority.AllowanceActive = false
+            return
+        end
+
+        task.wait(0.4)
+
+        -- CLAIM FIRST
+        local claimed = ClaimAllowanceAtATM(targetATM)
+
+        if claimed then
+            Log("Allowance claim succeeded")
+        else
+            Log("Allowance claim failed")
+        end
+
+        task.wait(0.5)
+
+        local startTime = tick()
+        local maxDepositTime = 12
+        local stillDepositing = true
+
+        while stillDepositing and (tick() - startTime) < maxDepositTime do
+            if not Settings.Enabled then
+                break
+            end
+
+            local aliveCharacter = LocalPlayer.Character
+            local aliveHumanoid = aliveCharacter and aliveCharacter:FindFirstChildOfClass("Humanoid")
+            if not aliveHumanoid or aliveHumanoid.Health <= 0 then
+                break
+            end
+
+            local cashValue = cashData:FindFirstChild("Cash")
+            local cash = cashValue and cashValue.Value or 0
+
+            if cash <= 0 then
+                Log("No cash left, ATM finished")
+                stillDepositing = false
+                break
+            end
+
+            -- IMPORTANT ORDER FOR DEPOSIT ONLY:
+            -- 1) drop 10
+            -- 2) deposit
+            if cash >= 10 then
+                Drop10Cash()
+            end
+
+            DepositCashAtATM(targetATM, cash)
+
+            task.wait(0.35)
+
+            local newCashValue = cashData:FindFirstChild("Cash")
+            local newCash = newCashValue and newCashValue.Value or 0
+
+            if newCash >= cash then
+                Log("Cash did not decrease, stopping ATM loop")
+                stillDepositing = false
+                break
+            end
+        end
+
+        ATMUsage[targetATM] = (ATMUsage[targetATM] or 0) + 1
+        AutoClaimAllowanceCoolDown = false
+        FarmPriority.AllowanceActive = false
+
+        Log("Allowance logic finished, returning to safe farm")
+    end
+end
+
 local function MainFarmLoop()
     Log("Autofarm loop started")
     RiseToTargetY()
+
     while true do
         task.wait(0.15)
+
         if not Settings.Enabled then
             task.wait(1)
             continue
         end
+
         Log("=== Farm cycle ===")
+
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         Settings.IsDead = (not humanoid) or (humanoid.Health <= 0)
+
         if Settings.IsDead then
             Log("Character dead, waiting")
             task.wait(3)
             continue
         end
+
+        -- ATM / allowance first
+        ProcessAllowanceIfReady()
+
         RiseToTargetY()
+
         if not HasTool("Crowbar") then
             Log("No crowbar, trying to buy")
             local bought = BuyCrowbar()
@@ -1712,18 +1982,23 @@ local function MainFarmLoop()
         else
             Log("Crowbar already owned")
         end
+
         local available, total = UpdateTargetsList()
         TotalAvailableTargets = available
+
         if available < 5 then
             Log("Few targets left (" .. available .. "), I recommend changing server")
         end
+
         if available == 0 then
             Log("No targets available, waiting 5 sec")
             task.wait(0.5)
             continue
         end
+
         local nextTarget = nil
         local minDist = math.huge
+
         for _, targetInfo in ipairs(SortedTargets) do
             if not Settings.TempIgnored[targetInfo.obj] then
                 local dist = (targetInfo.pos - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
@@ -1733,53 +2008,68 @@ local function MainFarmLoop()
                 end
             end
         end
+
         if not nextTarget then
             Log("No targets available, waiting 5 sec")
             task.wait(0.5)
             continue
         end
+
         local mainPart = nextTarget:FindFirstChild("MainPart") or nextTarget.PrimaryPart
         if not mainPart then
             Log("Target has no MainPart, skipping")
             Settings.ProcessedList[nextTarget] = true
             continue
         end
+
         Log("Moving to target: " .. nextTarget.Name .. ", distance " .. math.floor((mainPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude))
+
         local moveSuccess = MoveToTarget(mainPart)
+
         if moveSuccess then
-    if not LocalPlayer.Character:FindFirstChild("Crowbar") then
-        EquipTool("Crowbar")
-    end
+            if not LocalPlayer.Character:FindFirstChild("Crowbar") then
+                EquipTool("Crowbar")
+            end
 
-    Log("Opening safe")
-    local hackSuccess = HackSafe(nextTarget)
+            Log("Opening safe")
+            local hackSuccess = HackSafe(nextTarget)
 
-    if hackSuccess then
-        Log("Safe opened, waiting for money...")
+            if hackSuccess then
+                Log("Safe opened, waiting for money...")
 
-        task.wait(3)
+                task.wait(3)
 
-        local startTime = tick()
-        local maxCollectTime = 20
-        local stillMoney = true
+                local startTime = tick()
+                local maxCollectTime = 20
+                local stillMoney = true
 
-        while stillMoney and (tick() - startTime) < maxCollectTime do
-            stillMoney = CollectMoneyNearTarget(nextTarget)
-            task.wait(1)
-        end
+                while stillMoney and (tick() - startTime) < maxCollectTime do
+                    local playerDataFolder2 = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+                    local cashData2 = playerDataFolder2 and playerDataFolder2:FindFirstChild(LocalPlayer.Name)
+                    local nextAllowance2 = cashData2 and cashData2:FindFirstChild("NextAllowance")
 
-        Settings.ProcessedList[nextTarget] = true
-        Log("Safe fully processed")
-    else
-        Log("Failed to open safe, temporarily ignoring")
-        Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
-        table.insert(Settings.IgnoredList, nextTarget)
-    end
-else
-    Log("Failed to reach target, temporarily ignoring")
+                    if nextAllowance2 and nextAllowance2.Value == 0 and not AutoClaimAllowanceCoolDown then
+                        Log("Allowance became ready, pausing safe cycle")
+                        break
+                    end
+
+                    stillMoney = CollectMoneyNearTarget(nextTarget)
+                    task.wait(1)
+                end
+
+                Settings.ProcessedList[nextTarget] = true
+                Log("Safe fully processed")
+            else
+                Log("Failed to open safe, temporarily ignoring")
+                Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+                table.insert(Settings.IgnoredList, nextTarget)
+            end
+        else
+            Log("Failed to reach target, temporarily ignoring")
             Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
             table.insert(Settings.IgnoredList, nextTarget)
         end
+
         task.wait(0.6)
     end
 end
