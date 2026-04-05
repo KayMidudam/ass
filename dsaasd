@@ -491,34 +491,31 @@ end
 local function VisualizePath(waypoints, startPos)
     ClearPathVisuals()
     if not waypoints or #waypoints == 0 then return end
-    for i, wp in ipairs(waypoints) do
-        local part = Instance.new("Part")
-        part.Name = "Waypoint" .. i
-        part.Size = Vector3.new(2, 2, 2)
-        part.Position = wp.Position
-        part.Anchored = true
-        part.CanCollide = false
-        part.Material = Enum.Material.Neon
-        part.Color = Color3.new(1, 0, 0)
-        part.Transparency = 0.3
-        part.Parent = PathVisualsFolder
-    end
+
     local prevPos = startPos
+
     for i, wp in ipairs(waypoints) do
         local nextPos = wp.Position
         local dist = (nextPos - prevPos).Magnitude
-        if dist > 0.5 then
+
+        if dist > 0.2 then
             local line = Instance.new("Part")
             line.Name = "PathLine" .. i
             line.Anchored = true
             line.CanCollide = false
+            line.CanTouch = false
+            line.CanQuery = false
+            line.CastShadow = false
+            line.Massless = true
+            line.Locked = true
             line.Material = Enum.Material.Neon
-            line.Color = Color3.new(1, 0, 0)
-            line.Transparency = 0.5
-            line.Size = Vector3.new(0.5, 0.5, dist)
+            line.Color = Color3.fromRGB(0, 170, 255)
+            line.Transparency = 0.2
+            line.Size = Vector3.new(0.1, 0.1, dist)
             line.CFrame = CFrame.lookAt(prevPos + (nextPos - prevPos) / 2, nextPos)
             line.Parent = PathVisualsFolder
         end
+
         prevPos = nextPos
     end
 end
@@ -1170,33 +1167,26 @@ local EspEnabled = false
 local EspHeartbeatConnection = nil
 local EspElements = {}
 local EspTextSize = 20
+local EspScale = 1
+local EspShowDistance = true
 
 local function FormatName(rawName)
     rawName = string.gsub(rawName, "([a-z])([A-Z])", "%1 %2")
     rawName = string.gsub(rawName, "_", " ")
+
     if rawName:lower():find("safe") then
         return "🔒 " .. rawName
     elseif rawName:lower():find("register") then
         return "💰 " .. rawName
     end
+
     return rawName
 end
 
-local function CreateHighlight(part, color)
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "ESP_Highlight"
-    highlight.Adornee = part
-    highlight.FillColor = color
-    highlight.FillTransparency = 0.5
-    highlight.OutlineColor = Color3.new(1, 1, 1)
-    highlight.OutlineTransparency = 0
-    highlight.Parent = part
-    return highlight
-end
+local function GetESPFolder()
+    local bredFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("BredMakurz")
+        or Workspace:FindFirstChild("Filter") and Workspace.Filter:FindFirstChild("BredMakurz")
 
-local function UpdateESP()
-    if not EspEnabled then return end
-    local bredFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("BredMakurz") or Workspace:FindFirstChild("Filter") and Workspace.Filter:FindFirstChild("BredMakurz")
     if not bredFolder then
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj.Name == "BredMakurz" and obj:IsA("Folder") then
@@ -1205,110 +1195,345 @@ local function UpdateESP()
             end
         end
     end
-    if not bredFolder then return end
+
+    return bredFolder
+end
+
+local function CreatePremiumHighlight(target, color)
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.Adornee = target
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillColor = color
+    highlight.FillTransparency = 0.78
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.OutlineTransparency = 0.2
+    highlight.Parent = target
+    return highlight
+end
+
+local function CreatePremiumBillboard(mainPart, displayName, color)
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ESP_Billboard"
+    billboard.Adornee = mainPart
+    billboard.Size = UDim2.new(0, 210 * EspScale, 0, 68 * EspScale)
+    billboard.StudsOffset = Vector3.new(0, 4, 0)
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = 1500
+    billboard.LightInfluence = 0
+    billboard.ResetOnSpawn = false
+
+    local root = Instance.new("Frame")
+    root.Name = "Root"
+    root.Size = UDim2.fromScale(1, 1)
+    root.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+    root.BackgroundTransparency = 0.08
+    root.BorderSizePixel = 0
+    root.Parent = billboard
+
+    local rootCorner = Instance.new("UICorner")
+    rootCorner.CornerRadius = UDim.new(0, 12 * EspScale)
+    rootCorner.Parent = root
+
+    local gradient = Instance.new("UIGradient")
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 27, 36)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 16, 22))
+    })
+    gradient.Rotation = 90
+    gradient.Parent = root
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Transparency = 0.75
+    stroke.Thickness = 1.2 * EspScale
+    stroke.Parent = root
+
+    local accent = Instance.new("Frame")
+    accent.Name = "Accent"
+    accent.Size = UDim2.new(0, 4 * EspScale, 1, 0)
+    accent.BackgroundColor3 = color
+    accent.BorderSizePixel = 0
+    accent.Parent = root
+
+    local accentCorner = Instance.new("UICorner")
+    accentCorner.CornerRadius = UDim.new(0, 12 * EspScale)
+    accentCorner.Parent = accent
+
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0, 14 * EspScale, 0, 7 * EspScale)
+    title.Size = UDim2.new(1, -20 * EspScale, 0, 24 * EspScale)
+    title.Font = Enum.Font.GothamBold
+    title.Text = displayName
+    title.TextColor3 = Color3.fromRGB(245, 247, 255)
+    title.TextStrokeTransparency = 1
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextSize = EspTextSize * EspScale
+    title.Parent = root
+
+    local status = Instance.new("TextLabel")
+    status.Name = "Status"
+    status.BackgroundTransparency = 1
+    status.Position = UDim2.new(0, 14 * EspScale, 0, 33 * EspScale)
+    status.Size = UDim2.new(0.5, 0, 0, 16 * EspScale)
+    status.Font = Enum.Font.GothamSemibold
+    status.Text = "OPEN"
+    status.TextColor3 = color
+    status.TextStrokeTransparency = 1
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    status.Parent = root
+
+    local distance = Instance.new("TextLabel")
+    distance.Name = "Distance"
+    distance.BackgroundTransparency = 1
+    distance.Position = UDim2.new(0.5, 0, 0, 33 * EspScale)
+    distance.Size = UDim2.new(0.5, -12 * EspScale, 0, 16 * EspScale)
+    distance.Font = Enum.Font.GothamMedium
+    distance.Text = "0m"
+    distance.TextColor3 = Color3.fromRGB(190, 195, 210)
+    distance.TextStrokeTransparency = 1
+    distance.TextXAlignment = Enum.TextXAlignment.Right
+    distance.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    distance.Parent = root
+
+    local bottomBar = Instance.new("Frame")
+    bottomBar.Name = "BottomBar"
+    bottomBar.AnchorPoint = Vector2.new(0, 1)
+    bottomBar.Position = UDim2.new(0, 0, 1, 0)
+    bottomBar.Size = UDim2.new(1, 0, 0, 3 * EspScale)
+    bottomBar.BackgroundColor3 = color
+    bottomBar.BorderSizePixel = 0
+    bottomBar.Parent = root
+
+    local bottomCorner = Instance.new("UICorner")
+    bottomCorner.CornerRadius = UDim.new(0, 12 * EspScale)
+    bottomCorner.Parent = bottomBar
+
+    return {
+        billboard = billboard,
+        root = root,
+        title = title,
+        status = status,
+        distance = distance,
+        accent = accent,
+        bottomBar = bottomBar,
+        stroke = stroke
+    }
+end
+
+local function DestroyESPEntry(obj)
+    local data = EspElements[obj]
+    if not data then
+        return
+    end
+
+    pcall(function()
+        if data.billboard then
+            data.billboard:Destroy()
+        end
+    end)
+
+    pcall(function()
+        if data.highlight then
+            data.highlight:Destroy()
+        end
+    end)
+
+    EspElements[obj] = nil
+end
+
+local function RefreshESPScale(data)
+    if not data then
+        return
+    end
+
+    if data.billboard then
+        data.billboard.Size = UDim2.new(0, 210 * EspScale, 0, 68 * EspScale)
+    end
+
+    if data.title then
+        data.title.Position = UDim2.new(0, 14 * EspScale, 0, 7 * EspScale)
+        data.title.Size = UDim2.new(1, -20 * EspScale, 0, 24 * EspScale)
+        data.title.TextSize = EspTextSize * EspScale
+    end
+
+    if data.status then
+        data.status.Position = UDim2.new(0, 14 * EspScale, 0, 33 * EspScale)
+        data.status.Size = UDim2.new(0.5, 0, 0, 16 * EspScale)
+        data.status.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    end
+
+    if data.distance then
+        data.distance.Position = UDim2.new(0.5, 0, 0, 33 * EspScale)
+        data.distance.Size = UDim2.new(0.5, -12 * EspScale, 0, 16 * EspScale)
+        data.distance.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    end
+
+    if data.accent then
+        data.accent.Size = UDim2.new(0, 4 * EspScale, 1, 0)
+    end
+
+    if data.bottomBar then
+        data.bottomBar.Size = UDim2.new(1, 0, 0, 3 * EspScale)
+    end
+
+    if data.stroke then
+        data.stroke.Thickness = 1.2 * EspScale
+    end
+end
+
+local function UpdateSingleESP(obj, mainPart, brokenVal, hrp)
+    local isBroken = brokenVal and brokenVal.Value or false
+    local color = isBroken and Color3.fromRGB(255, 95, 95) or Color3.fromRGB(100, 255, 155)
+    local displayName = FormatName(obj.Name)
+    local distanceStuds = (mainPart.Position - hrp.Position).Magnitude
+    local distanceMeters = math.floor(distanceStuds / 3)
+
+    local esp = EspElements[obj]
+    if not esp then
+        local ui = CreatePremiumBillboard(mainPart, displayName, color)
+        ui.billboard.Parent = obj
+
+        local highlight = CreatePremiumHighlight(obj, color)
+
+        esp = {
+            billboard = ui.billboard,
+            root = ui.root,
+            title = ui.title,
+            status = ui.status,
+            distance = ui.distance,
+            accent = ui.accent,
+            bottomBar = ui.bottomBar,
+            stroke = ui.stroke,
+            highlight = highlight
+        }
+
+        EspElements[obj] = esp
+    end
+
+    RefreshESPScale(esp)
+
+    esp.title.Text = displayName
+    esp.status.Text = isBroken and "BROKEN" or "OPEN"
+    esp.status.TextColor3 = color
+
+    if esp.distance then
+        esp.distance.Visible = EspShowDistance
+        esp.distance.Text = tostring(distanceMeters) .. "m"
+    end
+
+    if esp.accent then
+        esp.accent.BackgroundColor3 = color
+    end
+
+    if esp.bottomBar then
+        esp.bottomBar.BackgroundColor3 = color
+    end
+
+    if esp.highlight then
+        esp.highlight.FillColor = color
+        esp.highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    end
+
+    local fade = math.clamp(distanceStuds / 500, 0, 1)
+    if esp.root then
+        esp.root.BackgroundTransparency = 0.08 + (fade * 0.32)
+    end
+    if esp.stroke then
+        esp.stroke.Transparency = 0.75 + (fade * 0.15)
+    end
+end
+
+local function UpdateESP()
+    if not EspEnabled then
+        return
+    end
+
+    local bredFolder = GetESPFolder()
+    if not bredFolder then
+        return
+    end
+
     local character = LocalPlayer.Character
     local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    if not hrp then
+        return
+    end
+
+    local seen = {}
+
     for _, obj in ipairs(bredFolder:GetChildren()) do
         local nameLower = obj.Name:lower()
         if nameLower:find("safe") or nameLower:find("register") then
-            local mainPart = obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
-            if not mainPart then continue end
-            if mainPart.Position.Y < 4.8 then continue end
-            local values = obj:FindFirstChild("Values")
-            local brokenVal = values and values:FindFirstChild("Broken")
-            local isBroken = brokenVal and brokenVal.Value
-            local color = isBroken and Color3.new(1, 0, 0) or Color3.new(0, 1, 0)
-            local esp = EspElements[obj]
-            if not esp then
-                local billboard = Instance.new("BillboardGui")
-                billboard.Name = "ESP_Billboard"
-                billboard.Adornee = mainPart
-                billboard.Size = UDim2.new(0, 200, 0, 50)
-                billboard.StudsOffset = Vector3.new(0, 4, 0)
-                billboard.AlwaysOnTop = true
-                billboard.MaxDistance = 1000
-                billboard.Parent = obj
-                local label = Instance.new("TextLabel")
-                label.Size = UDim2.new(1, 0, 1, 0)
-                label.BackgroundTransparency = 1
-                label.Font = Enum.Font.SourceSansBold
-                label.TextScaled = false
-                label.Text = FormatName(obj.Name)
-                label.TextColor3 = color
-                label.TextStrokeTransparency = 0
-                label.TextStrokeColor3 = Color3.new(0, 0, 0)
-                label.TextSize = EspTextSize
-                label.Parent = billboard
-                local highlight = CreateHighlight(obj, color)
-                EspElements[obj] = {
-                    billboard = billboard,
-                    highlight = highlight,
-                    label = label
-                }
-                if brokenVal then
-                    brokenVal:GetPropertyChangedSignal("Value"):Connect(function()
-                        if not EspEnabled or not EspElements[obj] then return end
-                        local e = EspElements[obj]
-                        if brokenVal.Value then
-                            e.label.TextColor3 = Color3.new(1, 0, 0)
-                            if e.highlight then
-                                e.highlight.FillColor = Color3.new(1, 0, 0)
-                            end
-                        else
-                            e.label.TextColor3 = Color3.new(0, 1, 0)
-                            if e.highlight then
-                                e.highlight.FillColor = Color3.new(0, 1, 0)
-                            end
-                        end
-                    end)
-                end
-            else
-                if brokenVal then
-                    esp.label.TextColor3 = isBroken and Color3.new(1, 0, 0) or Color3.new(0, 1, 0)
-                    if esp.highlight then
-                        esp.highlight.FillColor = isBroken and Color3.new(1, 0, 0) or Color3.new(0, 1, 0)
-                    end
-                end
-                if esp.label then
-                    esp.label.TextSize = EspTextSize
-                end
+            local mainPart = obj:FindFirstChild("MainPart") or obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+            if mainPart and mainPart.Position.Y >= 4.8 then
+                local values = obj:FindFirstChild("Values")
+                local brokenVal = values and values:FindFirstChild("Broken")
+
+                UpdateSingleESP(obj, mainPart, brokenVal, hrp)
+                seen[obj] = true
             end
         end
     end
-    for obj, data in pairs(EspElements) do
-        if not obj or not obj.Parent then
-            pcall(function()
-                if data.billboard then data.billboard:Destroy() end
-                if data.highlight then data.highlight:Destroy() end
-            end)
-            EspElements[obj] = nil
+
+    for obj, _ in pairs(EspElements) do
+        if not seen[obj] or not obj or not obj.Parent then
+            DestroyESPEntry(obj)
         end
     end
 end
 
 local function EnableESP()
-    if EspEnabled then return end
+    if EspEnabled then
+        return
+    end
+
     EspEnabled = true
     EspHeartbeatConnection = RunService.Heartbeat:Connect(UpdateESP)
-    Log("ESP for all safes/cash registers INCLUDED")
+    Log("Premium ESP ENABLED")
 end
 
 local function DisableESP()
-    if not EspEnabled then return end
+    if not EspEnabled then
+        return
+    end
+
     EspEnabled = false
+
     if EspHeartbeatConnection then
         EspHeartbeatConnection:Disconnect()
         EspHeartbeatConnection = nil
     end
-    for obj, data in pairs(EspElements) do
-        pcall(function()
-            if data.billboard then data.billboard:Destroy() end
-            if data.highlight then data.highlight:Destroy() end
-        end)
+
+    for obj, _ in pairs(EspElements) do
+        DestroyESPEntry(obj)
     end
+
     EspElements = {}
-    Log("ESP for all safes/cash registers OFF")
+    Log("Premium ESP DISABLED")
+end
+
+local function DisableESP()
+    if not EspEnabled then
+        return
+    end
+
+    EspEnabled = false
+
+    if EspHeartbeatConnection then
+        EspHeartbeatConnection:Disconnect()
+        EspHeartbeatConnection = nil
+    end
+
+    for obj, _ in pairs(EspElements) do
+        DestroyESPEntry(obj)
+    end
+
+    EspElements = {}
+    Log("Premium ESP DISABLED")
 end
 
 local function SetupBrokenTracking()
@@ -1596,16 +1821,46 @@ Tabs.Visuals:AddToggle("SafeESPToggle", {
 })
 
 Tabs.Visuals:AddSlider("TextSizeSlider", {
-    Title = "Text Size",
+    Title = "ESP Size",
     Default = 20,
     Min = 10,
     Max = 40,
     Rounding = 0,
     Callback = function(value)
         EspTextSize = value
+        EspScale = value / 20 -- 🔥 THIS IS THE MAGIC
+
         for _, data in pairs(EspElements) do
-            if data.label then
-                data.label.TextSize = EspTextSize
+            if data.billboard then
+                data.billboard.Size = UDim2.new(0, 210 * EspScale, 0, 68 * EspScale)
+            end
+
+            if data.title then
+                data.title.TextSize = EspTextSize * EspScale
+                data.title.Position = UDim2.new(0, 14 * EspScale, 0, 7 * EspScale)
+                data.title.Size = UDim2.new(1, -20 * EspScale, 0, 24 * EspScale)
+            end
+
+            if data.status then
+                data.status.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+                data.status.Position = UDim2.new(0, 14 * EspScale, 0, 33 * EspScale)
+            end
+
+            if data.distance then
+                data.distance.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+                data.distance.Position = UDim2.new(0.5, 0, 0, 33 * EspScale)
+            end
+
+            if data.accent then
+                data.accent.Size = UDim2.new(0, 4 * EspScale, 1, 0)
+            end
+
+            if data.bottomBar then
+                data.bottomBar.Size = UDim2.new(1, 0, 0, 3 * EspScale)
+            end
+
+            if data.stroke then
+                data.stroke.Thickness = 1.2 * EspScale
             end
         end
     end
@@ -1782,4 +2037,3 @@ input.InputEnded:Connect(function(Key)
     end
 
 end)
-
