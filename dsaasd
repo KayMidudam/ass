@@ -1163,12 +1163,49 @@ if LocalPlayer.Character then
     OnCharacterAdded(LocalPlayer.Character)
 end
 
+local BrokenStartedAt = {}
+
+local function GetBrokenResetTime(obj)
+    local name = string.lower(obj.Name)
+
+    if name:find("register") then
+        return 10 * 60
+    end
+
+    return 12 * 60
+end
+
+local function FormatTimeLeft(secondsLeft)
+    secondsLeft = math.max(0, math.floor(secondsLeft))
+    local minutes = math.floor(secondsLeft / 60)
+    local seconds = secondsLeft % 60
+    return string.format("%02d:%02d", minutes, seconds)
+end
+
 local EspEnabled = false
 local EspHeartbeatConnection = nil
 local EspElements = {}
 local EspTextSize = 20
 local EspScale = 1
 local EspShowDistance = true
+local BrokenStartedAt = {}
+
+local function GetBrokenResetTime(obj)
+    local name = string.lower(obj.Name)
+
+    if name:find("register") then
+        return 10 * 60
+    end
+
+    return 12 * 60
+end
+
+local function FormatTimeLeft(secondsLeft)
+    secondsLeft = math.max(0, math.floor(secondsLeft))
+    local minutes = math.floor(secondsLeft / 60)
+    local seconds = secondsLeft % 60
+    return string.format("%02d:%02d", minutes, seconds)
+end
 
 local function FormatName(rawName)
     rawName = string.gsub(rawName, "([a-z])([A-Z])", "%1 %2")
@@ -1199,6 +1236,24 @@ local function GetESPFolder()
     return bredFolder
 end
 
+local function GetBrokenValue(obj)
+    local values = obj:FindFirstChild("Values")
+    local brokenVal = values and values:FindFirstChild("Broken")
+    if brokenVal then
+        return brokenVal.Value
+    end
+
+    local interact = obj:FindFirstChild("Interact")
+    if interact then
+        local attr = interact:GetAttribute("Broken")
+        if attr ~= nil then
+            return attr == true
+        end
+    end
+
+    return false
+end
+
 local function CreatePremiumHighlight(target, color)
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESP_Highlight"
@@ -1216,7 +1271,7 @@ local function CreatePremiumBillboard(mainPart, displayName, color)
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "ESP_Billboard"
     billboard.Adornee = mainPart
-    billboard.Size = UDim2.new(0, 210 * EspScale, 0, 68 * EspScale)
+    billboard.Size = UDim2.new(0, 250 * EspScale, 0, 68 * EspScale)
     billboard.StudsOffset = Vector3.new(0, 4, 0)
     billboard.AlwaysOnTop = true
     billboard.MaxDistance = 1500
@@ -1277,7 +1332,7 @@ local function CreatePremiumBillboard(mainPart, displayName, color)
     status.Name = "Status"
     status.BackgroundTransparency = 1
     status.Position = UDim2.new(0, 14 * EspScale, 0, 33 * EspScale)
-    status.Size = UDim2.new(0.5, 0, 0, 16 * EspScale)
+    status.Size = UDim2.new(0.30, 0, 0, 16 * EspScale)
     status.Font = Enum.Font.GothamSemibold
     status.Text = "OPEN"
     status.TextColor3 = color
@@ -1286,11 +1341,25 @@ local function CreatePremiumBillboard(mainPart, displayName, color)
     status.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
     status.Parent = root
 
+    local timerLabel = Instance.new("TextLabel")
+    timerLabel.Name = "Timer"
+    timerLabel.BackgroundTransparency = 1
+    timerLabel.Position = UDim2.new(0.30, 0, 0, 33 * EspScale)
+    timerLabel.Size = UDim2.new(0.30, 0, 0, 16 * EspScale)
+    timerLabel.Font = Enum.Font.GothamMedium
+    timerLabel.Text = "--:--"
+    timerLabel.TextColor3 = Color3.fromRGB(255, 190, 120)
+    timerLabel.TextStrokeTransparency = 1
+    timerLabel.TextXAlignment = Enum.TextXAlignment.Center
+    timerLabel.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    timerLabel.Visible = false
+    timerLabel.Parent = root
+
     local distance = Instance.new("TextLabel")
     distance.Name = "Distance"
     distance.BackgroundTransparency = 1
-    distance.Position = UDim2.new(0.5, 0, 0, 33 * EspScale)
-    distance.Size = UDim2.new(0.5, -12 * EspScale, 0, 16 * EspScale)
+    distance.Position = UDim2.new(0.60, 0, 0, 33 * EspScale)
+    distance.Size = UDim2.new(0.40, -12 * EspScale, 0, 16 * EspScale)
     distance.Font = Enum.Font.GothamMedium
     distance.Text = "0m"
     distance.TextColor3 = Color3.fromRGB(190, 195, 210)
@@ -1317,6 +1386,7 @@ local function CreatePremiumBillboard(mainPart, displayName, color)
         root = root,
         title = title,
         status = status,
+        timerLabel = timerLabel,
         distance = distance,
         accent = accent,
         bottomBar = bottomBar,
@@ -1351,7 +1421,7 @@ local function RefreshESPScale(data)
     end
 
     if data.billboard then
-        data.billboard.Size = UDim2.new(0, 210 * EspScale, 0, 68 * EspScale)
+        data.billboard.Size = UDim2.new(0, 250 * EspScale, 0, 68 * EspScale)
     end
 
     if data.title then
@@ -1362,13 +1432,19 @@ local function RefreshESPScale(data)
 
     if data.status then
         data.status.Position = UDim2.new(0, 14 * EspScale, 0, 33 * EspScale)
-        data.status.Size = UDim2.new(0.5, 0, 0, 16 * EspScale)
+        data.status.Size = UDim2.new(0.30, 0, 0, 16 * EspScale)
         data.status.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
     end
 
+    if data.timerLabel then
+        data.timerLabel.Position = UDim2.new(0.30, 0, 0, 33 * EspScale)
+        data.timerLabel.Size = UDim2.new(0.30, 0, 0, 16 * EspScale)
+        data.timerLabel.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
+    end
+
     if data.distance then
-        data.distance.Position = UDim2.new(0.5, 0, 0, 33 * EspScale)
-        data.distance.Size = UDim2.new(0.5, -12 * EspScale, 0, 16 * EspScale)
+        data.distance.Position = UDim2.new(0.60, 0, 0, 33 * EspScale)
+        data.distance.Size = UDim2.new(0.40, -12 * EspScale, 0, 16 * EspScale)
         data.distance.TextSize = math.max((EspTextSize - 6) * EspScale, 8)
     end
 
@@ -1385,8 +1461,20 @@ local function RefreshESPScale(data)
     end
 end
 
-local function UpdateSingleESP(obj, mainPart, brokenVal, hrp)
-    local isBroken = brokenVal and brokenVal.Value or false
+local function UpdateBrokenStart(obj, isBroken)
+    if isBroken then
+        if not BrokenStartedAt[obj] then
+            BrokenStartedAt[obj] = tick()
+        end
+    else
+        BrokenStartedAt[obj] = nil
+    end
+end
+
+local function UpdateSingleESP(obj, mainPart, hrp)
+    local isBroken = GetBrokenValue(obj)
+    UpdateBrokenStart(obj, isBroken)
+
     local color = isBroken and Color3.fromRGB(255, 95, 95) or Color3.fromRGB(100, 255, 155)
     local displayName = FormatName(obj.Name)
     local distanceStuds = (mainPart.Position - hrp.Position).Magnitude
@@ -1404,6 +1492,7 @@ local function UpdateSingleESP(obj, mainPart, brokenVal, hrp)
             root = ui.root,
             title = ui.title,
             status = ui.status,
+            timerLabel = ui.timerLabel,
             distance = ui.distance,
             accent = ui.accent,
             bottomBar = ui.bottomBar,
@@ -1419,6 +1508,18 @@ local function UpdateSingleESP(obj, mainPart, brokenVal, hrp)
     esp.title.Text = displayName
     esp.status.Text = isBroken and "BROKEN" or "OPEN"
     esp.status.TextColor3 = color
+
+    if esp.timerLabel then
+        if isBroken and BrokenStartedAt[obj] then
+            local elapsed = tick() - BrokenStartedAt[obj]
+            local remaining = math.max(0, GetBrokenResetTime(obj) - elapsed)
+            esp.timerLabel.Visible = true
+            esp.timerLabel.Text = FormatTimeLeft(remaining)
+        else
+            esp.timerLabel.Visible = false
+            esp.timerLabel.Text = "--:--"
+        end
+    end
 
     if esp.distance then
         esp.distance.Visible = EspShowDistance
@@ -1442,6 +1543,7 @@ local function UpdateSingleESP(obj, mainPart, brokenVal, hrp)
     if esp.root then
         esp.root.BackgroundTransparency = 0.08 + (fade * 0.32)
     end
+
     if esp.stroke then
         esp.stroke.Transparency = 0.75 + (fade * 0.15)
     end
@@ -1470,10 +1572,7 @@ local function UpdateESP()
         if nameLower:find("safe") or nameLower:find("register") then
             local mainPart = obj:FindFirstChild("MainPart") or obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
             if mainPart and mainPart.Position.Y >= 4.8 then
-                local values = obj:FindFirstChild("Values")
-                local brokenVal = values and values:FindFirstChild("Broken")
-
-                UpdateSingleESP(obj, mainPart, brokenVal, hrp)
+                UpdateSingleESP(obj, mainPart, hrp)
                 seen[obj] = true
             end
         end
@@ -1482,6 +1581,7 @@ local function UpdateESP()
     for obj, _ in pairs(EspElements) do
         if not seen[obj] or not obj or not obj.Parent then
             DestroyESPEntry(obj)
+            BrokenStartedAt[obj] = nil
         end
     end
 end
@@ -1513,6 +1613,7 @@ local function DisableESP()
     end
 
     EspElements = {}
+    BrokenStartedAt = {}
     Log("Premium ESP DISABLED")
 end
 
