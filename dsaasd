@@ -1806,7 +1806,7 @@ local function ClaimAllowanceAtATM(targetATM)
         Log("Failed to claim allowance")
     end
 
-    task.wait(0.6)
+    task.wait(1.5)
     return ok
 end
 
