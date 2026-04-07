@@ -1942,138 +1942,9 @@ local function ProcessAllowanceIfReady()
     end
 end
 
-local PathFailCount = 0
-local MAX_PATH_FAILS = 3
-
-local function ResetCharacterBecauseStuck()
-    local character = LocalPlayer.Character
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-    Log("Too many path fails, resetting character")
-    StatusText = "Resetting (stuck)"
-
-    ClearPathVisuals()
-    IsMovingToTarget = false
-    CurrentTargetPart = nil
-    SomeFlag2 = false
-    IsRising = false
-    HasReachedTargetY = false
-    PathFailCount = 0
-
-    if humanoid and humanoid.Health > 0 then
-        pcall(function()
-            humanoid.Health = 0
-        end)
-    elseif character then
-        pcall(function()
-            character:BreakJoints()
-        end)
-    end
-end
-
---// ANTI STUCK (PATH FAIL BASED)
-local PathFailCount = 0
-local MAX_PATH_FAILS = 4 -- 3 tries, 4th = reset
-
-local function ResetCharacterBecauseStuck()
-    local character = LocalPlayer.Character
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-    Log("Too many path fails → resetting")
-    StatusText = "Resetting (stuck)"
-
-    ClearPathVisuals()
-    IsMovingToTarget = false
-    CurrentTargetPart = nil
-    SomeFlag2 = false
-
-    PathFailCount = 0
-
-    if humanoid and humanoid.Health > 0 then
-        humanoid.Health = 0
-    elseif character then
-        character:BreakJoints()
-    end
-end
-
-local function RegisterPathFail(reason)
-    PathFailCount += 1
-    Log((reason or "Path failed") .. " (" .. PathFailCount .. "/" .. MAX_PATH_FAILS .. ")")
-
-    if PathFailCount >= MAX_PATH_FAILS then
-        ResetCharacterBecauseStuck()
-        return true
-    end
-
-    return false
-end
-
-local function ResetPathFails()
-    PathFailCount = 0
-end
-
---// MOVE TO TARGET (FIXED)
-local function MoveToTarget(targetPart)
-    local character = LocalPlayer.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-
-    if not character or not hrp or not targetPart then
-        RegisterPathFail("Invalid movement setup")
-        return false
-    end
-
-    IsMovingToTarget = true
-    CurrentTargetPart = targetPart
-    StatusText = "Pathing..."
-
-    local startPos = hrp.Position
-    local endPos = targetPart.Position
-
-    local path = ComputePath(startPos, endPos)
-
-    if not path or #path == 0 then
-        IsMovingToTarget = false
-        RegisterPathFail("No path")
-        return false
-    end
-
-    VisualizePath(path, startPos)
-
-    local moveStart = tick()
-    local MOVE_TIMEOUT = 45
-
-    for _, waypoint in ipairs(path) do
-        if (tick() - moveStart) > MOVE_TIMEOUT then
-            IsMovingToTarget = false
-            ClearPathVisuals()
-            RegisterPathFail("Timeout")
-            return false
-        end
-
-        local dist = (waypoint.Position - hrp.Position).Magnitude
-
-        if dist > 0.5 then
-            local tween = TweenService:Create(
-                hrp,
-                TweenInfo.new(dist / Settings.MoveSpeed, Enum.EasingStyle.Linear),
-                {CFrame = CFrame.new(waypoint.Position)}
-            )
-
-            tween:Play()
-            tween.Completed:Wait()
-        end
-    end
-
-    ClearPathVisuals()
-    IsMovingToTarget = false
-
-    ResetPathFails()
-    return true
-end
-
---// MAIN LOOP (FIXED)
 local function MainFarmLoop()
-    Log("Autofarm started")
+    Log("Autofarm loop started")
+    RiseToTargetY()
 
     while true do
         task.wait(0.15)
@@ -2083,29 +1954,45 @@ local function MainFarmLoop()
             continue
         end
 
+        Log("=== Farm cycle ===")
+
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        Settings.IsDead = (not humanoid) or (humanoid.Health <= 0)
 
-        if not humanoid or humanoid.Health <= 0 then
+        if Settings.IsDead then
+            Log("Character dead, waiting")
             task.wait(3)
             continue
         end
 
-        -- ATM first
+        -- ATM / allowance first
         ProcessAllowanceIfReady()
 
-        -- Crowbar check
+        RiseToTargetY()
+
         if not HasTool("Crowbar") then
-            if not BuyCrowbar() then
+            Log("No crowbar, trying to buy")
+            local bought = BuyCrowbar()
+            if not bought then
+                Log("Failed to purchase crowbar, жду 5 сек")
                 task.wait(0.5)
                 continue
             end
+        else
+            Log("Crowbar already owned")
         end
 
-        local available = UpdateTargetsList()
+        local available, total = UpdateTargetsList()
+        TotalAvailableTargets = available
+
+        if available < 5 then
+            Log("Few targets left (" .. available .. "), I recommend changing server")
+        end
 
         if available == 0 then
-            task.wait(1)
+            Log("No targets available, waiting 5 sec")
+            task.wait(0.5)
             continue
         end
 
@@ -2114,7 +2001,7 @@ local function MainFarmLoop()
 
         for _, targetInfo in ipairs(SortedTargets) do
             if not Settings.TempIgnored[targetInfo.obj] then
-                local dist = (targetInfo.pos - character.HumanoidRootPart.Position).Magnitude
+                local dist = (targetInfo.pos - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
                 if dist < minDist then
                     minDist = dist
                     nextTarget = targetInfo.obj
@@ -2123,53 +2010,70 @@ local function MainFarmLoop()
         end
 
         if not nextTarget then
+            Log("No targets available, waiting 5 sec")
             task.wait(0.5)
             continue
         end
 
         local mainPart = nextTarget:FindFirstChild("MainPart") or nextTarget.PrimaryPart
         if not mainPart then
+            Log("Target has no MainPart, skipping")
             Settings.ProcessedList[nextTarget] = true
             continue
         end
+
+        Log("Moving to target: " .. nextTarget.Name .. ", distance " .. math.floor((mainPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude))
 
         local moveSuccess = MoveToTarget(mainPart)
 
-        if not moveSuccess then
-            Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
-            table.insert(Settings.IgnoredList, nextTarget)
-            continue
-        end
-
-        if not character:FindFirstChild("Crowbar") then
-            EquipTool("Crowbar")
-        end
-
-        local hackSuccess = HackSafe(nextTarget)
-
-        if hackSuccess then
-            ResetPathFails()
-
-            task.wait(2)
-
-            local startTime = tick()
-
-            while tick() - startTime < 20 do
-                if not CollectMoneyNearTarget(nextTarget) then
-                    break
-                end
-                task.wait(1)
+        if moveSuccess then
+            if not LocalPlayer.Character:FindFirstChild("Crowbar") then
+                EquipTool("Crowbar")
             end
 
-            Settings.ProcessedList[nextTarget] = true
+            Log("Opening safe")
+            local hackSuccess = HackSafe(nextTarget)
+
+            if hackSuccess then
+                Log("Safe opened, waiting for money...")
+
+                task.wait(3)
+
+                local startTime = tick()
+                local maxCollectTime = 20
+                local stillMoney = true
+
+                while stillMoney and (tick() - startTime) < maxCollectTime do
+                    local playerDataFolder2 = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+                    local cashData2 = playerDataFolder2 and playerDataFolder2:FindFirstChild(LocalPlayer.Name)
+                    local nextAllowance2 = cashData2 and cashData2:FindFirstChild("NextAllowance")
+
+                    if nextAllowance2 and nextAllowance2.Value == 0 and not AutoClaimAllowanceCoolDown then
+                        Log("Allowance became ready, pausing safe cycle")
+                        break
+                    end
+
+                    stillMoney = CollectMoneyNearTarget(nextTarget)
+                    task.wait(1)
+                end
+
+                Settings.ProcessedList[nextTarget] = true
+                Log("Safe fully processed")
+            else
+                Log("Failed to open safe, temporarily ignoring")
+                Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+                table.insert(Settings.IgnoredList, nextTarget)
+            end
         else
+            Log("Failed to reach target, temporarily ignoring")
             Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
             table.insert(Settings.IgnoredList, nextTarget)
         end
 
-        task.wait(0.5)
+        task.wait(0.6)
     end
 end
+
 
 ------------------------------------------------
 -- C4 VARIABLES
