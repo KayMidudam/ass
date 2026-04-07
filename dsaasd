@@ -600,46 +600,158 @@ local function GetFootPosition()
     return hrp.Position - Vector3.new(0, 2.5, 0)
 end
 
+--// PATH FAIL / ANTI-STUCK
+local PathFailCount = 0
+local MAX_PATH_FAILS = 4 -- 3 failed tries, death on 4th
+
+local function ResetPathFails()
+    PathFailCount = 0
+end
+
+local function ResetCharacterBecauseStuck()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    Log("Too many path fails, resetting character")
+    StatusText = "Resetting (stuck)"
+
+    ClearPathVisuals()
+    IsMovingToTarget = false
+    CurrentTargetPart = nil
+    SomeFlag2 = false
+    IsRising = false
+    HasReachedTargetY = false
+    ResetPathFails()
+
+    if humanoid and humanoid.Health > 0 then
+        pcall(function()
+            humanoid.Health = 0
+        end)
+    elseif character then
+        pcall(function()
+            character:BreakJoints()
+        end)
+    end
+end
+
+local function RegisterPathFail(reason)
+    PathFailCount += 1
+    Log((reason or "Path failed") .. " (" .. PathFailCount .. "/" .. MAX_PATH_FAILS .. ")")
+
+    if PathFailCount >= MAX_PATH_FAILS then
+        ResetCharacterBecauseStuck()
+        return true
+    end
+
+    return false
+end
+
+local function EquipTool(toolName)
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+    if not character or not backpack then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return false
+    end
+
+    if character:FindFirstChild(toolName) then
+        return true
+    end
+
+    local tool = backpack:FindFirstChild(toolName)
+    if not tool then
+        Log("EquipTool: tool not found -> " .. toolName)
+        return false
+    end
+
+    pcall(function()
+        humanoid:EquipTool(tool)
+    end)
+
+    task.wait(0.2)
+
+    return character:FindFirstChild(toolName) ~= nil
+end
+
+local function EnsureCrowbarEquipped()
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChild("Crowbar") then
+        return true
+    end
+
+    local equipped = EquipTool("Crowbar")
+    if equipped and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Crowbar") then
+        return true
+    end
+
+    Log("Failed to equip crowbar")
+    return false
+end
+
+--// MOVE TO TARGET
 local function MoveToTarget(targetPart)
     RiseToTargetY()
+
     local character = LocalPlayer.Character
     if not character then
-        Log("No character")
+        Log("MoveToTarget: no character")
+        RegisterPathFail("No character")
         return false
     end
+
     local hrp = character:FindFirstChild("HumanoidRootPart")
-    local humanoid = character:FindFirstChild("Humanoid")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not hrp or not humanoid then
-        Log("No HRP or Humanoid")
+        Log("MoveToTarget: no HRP or Humanoid")
+        RegisterPathFail("No HRP or Humanoid")
         return false
     end
+
     if not targetPart or not targetPart:IsA("BasePart") then
-        Log("Invalid target")
+        Log("MoveToTarget: invalid target")
+        RegisterPathFail("Invalid target")
         return false
     end
+
     CurrentTargetPart = targetPart
     IsMovingToTarget = true
     SomeFlag2 = false
     StatusText = "Path to target"
+
     local startPos = hrp.Position
     local targetFrontPos = GetPositionInFrontOfTarget(targetPart, startPos)
+
     if not targetFrontPos then
-        Log("Failed to calculate position in front of object")
+        Log("MoveToTarget: failed to calculate front position")
         IsMovingToTarget = false
         StatusText = "Waiting"
+        RegisterPathFail("Front position failed")
         return false
     end
+
     local endPos = targetFrontPos
     Log("Searching path to target, distance " .. math.floor((endPos - startPos).Magnitude))
+
     local path = ComputePath(startPos, endPos)
-    if not path then
-        Log("Path not found, temporarily ignoring target")
+    if not path or #path == 0 then
+        Log("MoveToTarget: path not found")
         IsMovingToTarget = false
         StatusText = "Waiting"
+        RegisterPathFail("Path not found")
         return false
     end
+
     Log("Path found, waypoints: " .. #path)
     VisualizePath(path, startPos)
+
+    local moveStartTime = tick()
+    local MOVE_TIMEOUT = 45
+
     for _, waypoint in ipairs(path) do
         if not Settings.Enabled then
             ClearPathVisuals()
@@ -647,33 +759,51 @@ local function MoveToTarget(targetPart)
             StatusText = "Waiting"
             return false
         end
-        local footPos = GetFootPosition()
-        if not footPos then continue end
+
+        if (tick() - moveStartTime) > MOVE_TIMEOUT then
+            Log("MoveToTarget: timeout")
+            ClearPathVisuals()
+            IsMovingToTarget = false
+            StatusText = "Waiting"
+            RegisterPathFail("Move timeout")
+            return false
+        end
+
         local targetPos = waypoint.Position
         local targetHRP = targetPos + Vector3.new(0, 2.5, 0)
         local currentRot = hrp.CFrame - hrp.CFrame.Position
         local targetCF = CFrame.new(targetHRP) * currentRot
         local dist = (targetHRP - hrp.Position).Magnitude
+
         if dist > 0.2 then
-            local tween = TweenService:Create(hrp, TweenInfo.new(dist / Settings.MoveSpeed, Enum.EasingStyle.Linear), { CFrame = targetCF })
+            local tween = TweenService:Create(
+                hrp,
+                TweenInfo.new(dist / Settings.MoveSpeed, Enum.EasingStyle.Linear),
+                { CFrame = targetCF }
+            )
             tween:Play()
             tween.Completed:Wait()
             LastTick = tick()
         end
+
         if waypoint.Action == Enum.PathWaypointAction.Jump then
             humanoid.Jump = true
             task.wait(0.1)
         end
     end
+
     ClearPathVisuals()
+
     local finalPos = endPos
     local finalHRP = finalPos + Vector3.new(0, 2.5, 0)
     hrp.CFrame = CFrame.new(finalHRP) * CFrame.Angles(0, math.rad(90), 0)
     hrp.AssemblyLinearVelocity = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
+
     Log("Target reached")
     IsMovingToTarget = false
     StatusText = "Waiting"
+    ResetPathFails()
     return true
 end
 
@@ -1942,6 +2072,7 @@ local function ProcessAllowanceIfReady()
     end
 end
 
+--// MAIN LOOP
 local function MainFarmLoop()
     Log("Autofarm loop started")
     RiseToTargetY()
@@ -1966,7 +2097,7 @@ local function MainFarmLoop()
             continue
         end
 
-        -- ATM / allowance first
+        -- allowance / ATM first
         ProcessAllowanceIfReady()
 
         RiseToTargetY()
@@ -1975,7 +2106,7 @@ local function MainFarmLoop()
             Log("No crowbar, trying to buy")
             local bought = BuyCrowbar()
             if not bought then
-                Log("Failed to purchase crowbar, жду 5 сек")
+                Log("Failed to purchase crowbar, waiting")
                 task.wait(0.5)
                 continue
             end
@@ -1991,17 +2122,23 @@ local function MainFarmLoop()
         end
 
         if available == 0 then
-            Log("No targets available, waiting 5 sec")
+            Log("No targets available, waiting")
             task.wait(0.5)
             continue
         end
 
         local nextTarget = nil
         local minDist = math.huge
+        local currentHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+        if not currentHRP then
+            task.wait(0.5)
+            continue
+        end
 
         for _, targetInfo in ipairs(SortedTargets) do
             if not Settings.TempIgnored[targetInfo.obj] then
-                local dist = (targetInfo.pos - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                local dist = (targetInfo.pos - currentHRP.Position).Magnitude
                 if dist < minDist then
                     minDist = dist
                     nextTarget = targetInfo.obj
@@ -2010,7 +2147,7 @@ local function MainFarmLoop()
         end
 
         if not nextTarget then
-            Log("No targets available, waiting 5 sec")
+            Log("No valid target found, waiting")
             task.wait(0.5)
             continue
         end
@@ -2022,19 +2159,24 @@ local function MainFarmLoop()
             continue
         end
 
-        Log("Moving to target: " .. nextTarget.Name .. ", distance " .. math.floor((mainPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude))
+        Log("Moving to target: " .. nextTarget.Name .. ", distance " .. math.floor((mainPart.Position - currentHRP.Position).Magnitude))
 
         local moveSuccess = MoveToTarget(mainPart)
 
         if moveSuccess then
-            if not LocalPlayer.Character:FindFirstChild("Crowbar") then
-                EquipTool("Crowbar")
+            if not EnsureCrowbarEquipped() then
+                Log("Could not equip crowbar, skipping target")
+                Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+                table.insert(Settings.IgnoredList, nextTarget)
+                task.wait(0.5)
+                continue
             end
 
             Log("Opening safe")
             local hackSuccess = HackSafe(nextTarget)
 
             if hackSuccess then
+                ResetPathFails()
                 Log("Safe opened, waiting for money...")
 
                 task.wait(3)
@@ -2065,9 +2207,15 @@ local function MainFarmLoop()
                 table.insert(Settings.IgnoredList, nextTarget)
             end
         else
+            -- do not increment here; MoveToTarget already counted the fail
             Log("Failed to reach target, temporarily ignoring")
             Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
             table.insert(Settings.IgnoredList, nextTarget)
+
+            if Settings.IsDead then
+                task.wait(2)
+                continue
+            end
         end
 
         task.wait(0.6)
