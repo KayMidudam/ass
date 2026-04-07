@@ -1942,8 +1942,66 @@ local function ProcessAllowanceIfReady()
     end
 end
 
+local STUCK_RESET_TIME = 180 -- 3 minutes
+
+local function MarkFarmProgress(reason)
+    LastTick = tick()
+    if reason then
+        Log("Progress marked: " .. reason)
+    end
+end
+
+local function ResetCharacterBecauseStuck()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    Log("No farm progress for 3 minutes, resetting character")
+
+    StatusText = "Resetting (stuck)"
+    ClearPathVisuals()
+    IsMovingToTarget = false
+    SomeFlag2 = false
+    CurrentTargetPart = nil
+    HasReachedTargetY = false
+    IsRising = false
+
+    if humanoid and humanoid.Health > 0 then
+        pcall(function()
+            humanoid.Health = 0
+        end)
+    elseif character then
+        pcall(function()
+            character:BreakJoints()
+        end)
+    end
+
+    LastTick = tick()
+end
+
+local function CheckFarmStuckTimeout()
+    if not Settings.Enabled then
+        return false
+    end
+
+    if Settings.IsDead then
+        return false
+    end
+
+    if IsRespawning then
+        return false
+    end
+
+    if (tick() - LastTick) >= STUCK_RESET_TIME then
+        ResetCharacterBecauseStuck()
+        return true
+    end
+
+    return false
+end
+
 local function MainFarmLoop()
     Log("Autofarm loop started")
+    MarkFarmProgress("loop start")
     RiseToTargetY()
 
     while true do
@@ -1966,8 +2024,15 @@ local function MainFarmLoop()
             continue
         end
 
+        -- 3 minute stuck protection
+        if CheckFarmStuckTimeout() then
+            task.wait(2)
+            continue
+        end
+
         -- ATM / allowance first
         ProcessAllowanceIfReady()
+        MarkFarmProgress("post allowance check")
 
         RiseToTargetY()
 
@@ -1976,9 +2041,17 @@ local function MainFarmLoop()
             local bought = BuyCrowbar()
             if not bought then
                 Log("Failed to purchase crowbar, жду 5 сек")
+
+                if CheckFarmStuckTimeout() then
+                    task.wait(2)
+                    continue
+                end
+
                 task.wait(0.5)
                 continue
             end
+
+            MarkFarmProgress("crowbar bought")
         else
             Log("Crowbar already owned")
         end
@@ -1992,6 +2065,12 @@ local function MainFarmLoop()
 
         if available == 0 then
             Log("No targets available, waiting 5 sec")
+
+            if CheckFarmStuckTimeout() then
+                task.wait(2)
+                continue
+            end
+
             task.wait(0.5)
             continue
         end
@@ -2011,6 +2090,12 @@ local function MainFarmLoop()
 
         if not nextTarget then
             Log("No targets available, waiting 5 sec")
+
+            if CheckFarmStuckTimeout() then
+                task.wait(2)
+                continue
+            end
+
             task.wait(0.5)
             continue
         end
@@ -2027,6 +2112,8 @@ local function MainFarmLoop()
         local moveSuccess = MoveToTarget(mainPart)
 
         if moveSuccess then
+            MarkFarmProgress("reached target")
+
             if not LocalPlayer.Character:FindFirstChild("Crowbar") then
                 EquipTool("Crowbar")
             end
@@ -2035,6 +2122,7 @@ local function MainFarmLoop()
             local hackSuccess = HackSafe(nextTarget)
 
             if hackSuccess then
+                MarkFarmProgress("hack success")
                 Log("Safe opened, waiting for money...")
 
                 task.wait(3)
@@ -2053,21 +2141,40 @@ local function MainFarmLoop()
                         break
                     end
 
+                    if CheckFarmStuckTimeout() then
+                        task.wait(2)
+                        break
+                    end
+
                     stillMoney = CollectMoneyNearTarget(nextTarget)
+                    MarkFarmProgress("collecting money")
                     task.wait(1)
                 end
 
                 Settings.ProcessedList[nextTarget] = true
+                MarkFarmProgress("safe fully processed")
                 Log("Safe fully processed")
             else
                 Log("Failed to open safe, temporarily ignoring")
                 Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
                 table.insert(Settings.IgnoredList, nextTarget)
+
+                -- no hack success -> let watchdog eventually reset if this keeps happening
+                if CheckFarmStuckTimeout() then
+                    task.wait(2)
+                    continue
+                end
             end
         else
             Log("Failed to reach target, temporarily ignoring")
             Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
             table.insert(Settings.IgnoredList, nextTarget)
+
+            -- no path success -> let watchdog eventually reset if stuck for 3 min
+            if CheckFarmStuckTimeout() then
+                task.wait(2)
+                continue
+            end
         end
 
         task.wait(0.6)
