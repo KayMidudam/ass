@@ -1,1 +1,4251 @@
-no
+-- SevV3 Beta.lua (FIXED INVIS)
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local PathfindingService = game:GetService("PathfindingService")
+local LocalPlayer = Players.LocalPlayer
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local Settings = {
+    Enabled = false,
+    IsDead = false,
+    IgnoredList = {},
+    ProcessedList = {},
+    TempIgnored = {},
+    IgnoreDuration = 60,
+    DebugPrintEnabled = false,
+    TargetY = 4.8,
+    MoveSpeed = 34.9,
+    PickupDistance = 8,
+    FarmMethod = "Pathfinding"
+}
+
+local function Log(msg)
+    if Settings.DebugPrintEnabled then
+        print("[AutoFarm]", msg)
+    end
+end
+
+--========================
+-- ANTI AFK
+--========================
+local VirtualUser = game:GetService("VirtualUser")
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+--========================
+-- AUTO PICKUP (FIXED OLD VERSION)
+--========================
+
+local AutoPickupRunning = false
+local AutoPickupThread = nil
+local PickupBusy = false
+
+local function TryPickupNearbyCash()
+	if Settings.IsDead then return end
+	if PickupBusy then return end
+
+	local folder = Workspace:FindFirstChild("Filter") and Workspace.Filter:FindFirstChild("SpawnedBread")
+	local event = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("CZDPZUS")
+	if not folder or not event then return end
+
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	local charPos = hrp.Position
+	local closestPart = nil
+	local closestDistance = math.huge
+
+	for _, bread in ipairs(folder:GetChildren()) do
+		if bread:IsA("BasePart") and bread.Parent and bread.Transparency < 1 then
+			local dist = (charPos - bread.Position).Magnitude
+
+			if dist <= (Settings.PickupDistance or 10) and dist < closestDistance then
+				closestDistance = dist
+				closestPart = bread
+			end
+		end
+	end
+
+	if closestPart then
+		PickupBusy = true
+
+		pcall(function()
+			event:FireServer(closestPart)
+		end)
+
+		task.wait(0.3) -- 🔥 throttle (prevents spam)
+
+		PickupBusy = false
+	end
+end
+
+local function StartAutoPickup()
+	if AutoPickupRunning then return end
+	AutoPickupRunning = true
+
+	AutoPickupThread = task.spawn(function()
+		while AutoPickupRunning do
+			TryPickupNearbyCash()
+			task.wait(0.12)
+		end
+	end)
+end
+
+local function StopAutoPickup()
+	AutoPickupRunning = false
+	PickupBusy = false
+end
+
+--======================= OLD INVIS LOGIC (Clean Version) =========================--
+
+local Invis_Enabled = false
+local Invis_Connection = nil
+local InvisAnimTrack = nil
+local InvisWarningLabel = nil
+
+local function LoadInvisAnim(humanoid)
+    if InvisAnimTrack then
+        pcall(function() InvisAnimTrack:Stop() end)
+    end
+    if humanoid then
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://215384594"
+        local success, track = pcall(function()
+            return humanoid:LoadAnimation(anim)
+        end)
+        if success then
+            InvisAnimTrack = track
+            InvisAnimTrack.Priority = Enum.AnimationPriority.Action4
+        end
+    end
+end
+
+local function Invis_Enable()
+    if Invis_Enabled then return end
+    Invis_Enabled = true
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or not hrp then return end
+
+    -- Camera trick
+    workspace.CurrentCamera.CameraSubject = hrp
+
+    LoadInvisAnim(humanoid)
+
+    -- Warning label
+    if not InvisWarningLabel then
+        InvisWarningLabel = Instance.new("TextLabel")
+        InvisWarningLabel.Name = "InvisWarning"
+        InvisWarningLabel.Size = UDim2.new(0, 280, 0, 40)
+        InvisWarningLabel.Position = UDim2.new(0.5, -140, 0.85, 0)
+        InvisWarningLabel.BackgroundTransparency = 1
+        InvisWarningLabel.Text = "⚠️ DON'T JUMP - YOU'RE VISIBLE ⚠️"
+        InvisWarningLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+        InvisWarningLabel.TextStrokeTransparency = 0.4
+        InvisWarningLabel.Font = Enum.Font.GothamBold
+        InvisWarningLabel.TextSize = 18
+        InvisWarningLabel.Parent = game:GetService("CoreGui")
+    end
+
+    Invis_Connection = RunService.Heartbeat:Connect(function()
+        if not Invis_Enabled then return end
+
+        local char = LocalPlayer.Character
+        if not char then return end
+
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+
+        if not humanoid or not hrp then return end
+
+        -- Make body semi-transparent
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                part.Transparency = 0.5
+            end
+        end
+
+        -- Animation trick
+        if InvisAnimTrack then
+            pcall(function()
+                if not InvisAnimTrack.IsPlaying then
+                    InvisAnimTrack:Play()
+                end
+                InvisAnimTrack:AdjustSpeed(0)
+                InvisAnimTrack.TimePosition = 0.3
+            end)
+        end
+
+        -- Warning when in air
+        if InvisWarningLabel then
+            InvisWarningLabel.Visible = (humanoid:GetState() ~= Enum.HumanoidStateType.Running and humanoid:GetState() ~= Enum.HumanoidStateType.RunningNoPhysics)
+        end
+    end)
+
+    print("[Invis] ENABLED - Old School Method")
+end
+
+local function Invis_Disable()
+    if not Invis_Enabled then return end
+    Invis_Enabled = false
+
+    if Invis_Connection then
+        Invis_Connection:Disconnect()
+        Invis_Connection = nil
+    end
+
+    if InvisAnimTrack then
+        pcall(function() InvisAnimTrack:Stop() end)
+        InvisAnimTrack = nil
+    end
+
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Transparency = 0
+            end
+        end
+    end
+
+    if InvisWarningLabel then
+        InvisWarningLabel.Visible = false
+    end
+
+    workspace.CurrentCamera.CameraSubject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+    print("[Invis] DISABLED")
+end
+--========================
+-- NOCLIP (SAFE)
+--========================
+RunService.Stepped:Connect(function()
+    if not Settings.Enabled then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+end)
+
+--========================
+-- DOORS
+--========================
+local function DisableDoorsCollision()
+    local map = Workspace:FindFirstChild("Map")
+    if not map then return end
+
+    local doors = map:FindFirstChild("Doors")
+    if not doors then return end
+
+    for _, door in ipairs(doors:GetDescendants()) do
+        if door:IsA("BasePart") then
+            door.CanCollide = false
+        end
+    end
+end
+
+DisableDoorsCollision()
+
+--========================
+-- SIMPLE MOVE (TEST SAFE)
+--========================
+local function MoveToPosition(pos)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    IsMovingToTarget = true
+
+    local start = tick()
+
+    while (hrp.Position - pos).Magnitude > 4 do
+        if tick() - start > 10 then break end
+
+        local dir = (pos - hrp.Position).Unit
+        hrp.Velocity = dir * Settings.MoveSpeed
+
+        RunService.Heartbeat:Wait()
+    end
+
+    -- 🔥 IMPORTANT FIX
+    IsMovingToTarget = false
+
+    hrp.Velocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+
+    return true
+end
+
+local function RiseToTargetY()
+    if HasReachedTargetY then return end
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if hrp and humanoid and humanoid.Health > 0 and hrp.Position.Y < 4.7 and not IsRising then
+        Log("below 4.7")
+        StatusText = "Climbing to 4.8"
+        IsRising = true
+
+        local startPos = hrp.Position
+        local targetY = 4.8
+        local startY = startPos.Y
+        local deltaY = targetY - startY
+        if deltaY <= 0 then
+            IsRising = false
+            StatusText = "Expectation"
+            return
+        end
+
+        local steps = math.max(3, math.floor(deltaY * 2))
+        local waypoints = {}
+        for i = 1, steps do
+            local alpha = i / steps
+            local y = startY + deltaY * alpha
+            table.insert(waypoints, Vector3.new(startPos.X, y, startPos.Z))
+        end
+
+        for _, wp in ipairs(waypoints) do
+            if not Settings.Enabled then break end
+            local currentRot = hrp.CFrame - hrp.CFrame.Position
+            local targetCF = CFrame.new(wp) * currentRot
+            local dist = (wp - hrp.Position).Magnitude
+            local duration = math.min(0.5, dist / 10)
+
+            local tween = TweenService:Create(hrp, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = targetCF })
+            tween:Play()
+            tween.Completed:Wait()
+        end
+
+        hrp.CFrame = CFrame.new(startPos.X, targetY, startPos.Z) * (hrp.CFrame - hrp.CFrame.Position)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+
+        Log("Reached 4.8")
+        task.wait(3)
+        Log("The measurement is complete")
+
+        IsRising = false
+        HasReachedTargetY = true
+        StatusText = "Expectation"
+    end
+end
+
+local PathVisualsFolder = Instance.new("Folder")
+PathVisualsFolder.Name = "PathVisuals"
+PathVisualsFolder.Parent = Workspace
+
+local function ClearPathVisuals()
+    for _, child in ipairs(PathVisualsFolder:GetChildren()) do
+        pcall(function() child:Destroy() end)
+    end
+end
+
+local function VisualizePath(waypoints, startPos)
+    ClearPathVisuals()
+    if not waypoints or #waypoints == 0 then return end
+
+    local prevPos = startPos
+
+    for i, wp in ipairs(waypoints) do
+        local nextPos = wp.Position
+        local dist = (nextPos - prevPos).Magnitude
+
+        if dist > 0.2 then
+            local line = Instance.new("Part")
+            line.Name = "PathLine" .. i
+            line.Anchored = true
+            line.CanCollide = false
+            line.CanTouch = false
+            line.CanQuery = false
+            line.CastShadow = false
+            line.Massless = true
+            line.Locked = true
+            line.Material = Enum.Material.Neon
+            line.Color = Color3.fromRGB(0, 170, 255)
+            line.Transparency = 0.2
+            line.Size = Vector3.new(0.1, 0.1, dist)
+            line.CFrame = CFrame.lookAt(prevPos + (nextPos - prevPos) / 2, nextPos)
+            line.Parent = PathVisualsFolder
+        end
+
+        prevPos = nextPos
+    end
+end
+
+local function ComputePath(startPos, endPos)
+    local pathParamsList = {
+        { Radius = 1, Height = 4, Spacing = 2 },
+        { Radius = 1.2, Height = 4.5, Spacing = 2.5 },
+        { Radius = 1.5, Height = 5, Spacing = 3 },
+        { Radius = 2, Height = 5.5, Spacing = 4 },
+        { Radius = 2.5, Height = 6, Spacing = 5 },
+        { Radius = 3, Height = 6.5, Spacing = 5 },
+        { Radius = 3.5, Height = 7, Spacing = 6 },
+        { Radius = 4, Height = 7.5, Spacing = 6 },
+        { Radius = 1, Height = 8, Spacing = 3 },
+        { Radius = 5, Height = 5, Spacing = 5 },
+        { Radius = 1.8, Height = 4.2, Spacing = 2.2 },
+        { Radius = 2.2, Height = 5.8, Spacing = 4.5 },
+        { Radius = 2.8, Height = 6.2, Spacing = 5.5 },
+        { Radius = 3.2, Height = 6.8, Spacing = 5.8 },
+        { Radius = 3.8, Height = 7.2, Spacing = 6.2 }
+    }
+    for _, params in ipairs(pathParamsList) do
+        local pathParams = {
+            AgentRadius = params.Radius,
+            AgentHeight = params.Height,
+            AgentCanJump = true,
+            AgentCanClimb = true,
+            WaypointSpacing = params.Spacing,
+            CostCalibration = true
+        }
+        local path = PathfindingService:CreatePath(pathParams)
+        local success, _ = pcall(function() path:ComputeAsync(startPos, endPos) end)
+        if success and path.Status == Enum.PathStatus.Success then
+            local rawWaypoints = path:GetWaypoints()
+            if not rawWaypoints or #rawWaypoints < 2 then return rawWaypoints end
+            local refinedWaypoints = {}
+local spacing = tonumber(Settings.WaypointSpacing) or 3
+table.insert(refinedWaypoints, rawWaypoints[1])
+
+for i = 2, #rawWaypoints do
+    local prev = rawWaypoints[i - 1].Position
+    local curr = rawWaypoints[i].Position
+    local dist = (curr - prev).Magnitude
+
+    if dist <= spacing then
+        table.insert(refinedWaypoints, rawWaypoints[i])
+    else
+        local steps = math.ceil(dist / spacing)
+        for j = 1, steps do
+            local alpha = j / steps
+            local pos = prev:Lerp(curr, alpha)
+            local action = (j == steps and rawWaypoints[i].Action) or Enum.PathWaypointAction.Walk
+            table.insert(refinedWaypoints, { Position = pos, Action = action })
+        end
+    end
+end
+            return refinedWaypoints
+        end
+        task.wait(0.05)
+    end
+    return nil
+end
+
+local function GetPositionInFrontOfTarget(targetPart, fromPos)
+    if not targetPart then return nil end
+    local success, cf = pcall(function() return targetPart.CFrame end)
+    if not success then return nil end
+    local lookVec = cf.LookVector
+    lookVec = Vector3.new(lookVec.X, 0, lookVec.Z).Unit
+    if lookVec.Magnitude < 0.1 then
+        lookVec = (fromPos - cf.Position).Unit
+        lookVec = Vector3.new(lookVec.X, 0, lookVec.Z).Unit
+        if lookVec.Magnitude < 0.1 then lookVec = Vector3.new(1, 0, 0) end
+    end
+    return cf.Position + lookVec * 4
+end
+
+local function GetFootPosition()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    return hrp.Position - Vector3.new(0, 2.5, 0)
+end
+
+--// PATH FAIL / ANTI-STUCK
+local PathFailCount = 0 local MAX_PATH_FAILS = 15 -- 3 failed tries, death on 4th
+
+local function ResetPathFails()
+    PathFailCount = 0
+end
+
+local function ResetCharacterBecauseStuck()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    Log("Too many path fails, resetting character")
+    StatusText = "Resetting (stuck)"
+
+    ClearPathVisuals()
+    IsMovingToTarget = false
+    CurrentTargetPart = nil
+    SomeFlag2 = false
+    IsRising = false
+    HasReachedTargetY = false
+    ResetPathFails()
+
+    if humanoid and humanoid.Health > 0 then
+        pcall(function()
+            humanoid.Health = 0
+        end)
+    elseif character then
+        pcall(function()
+            character:BreakJoints()
+        end)
+    end
+end
+
+local function RegisterPathFail(reason)
+    PathFailCount += 1
+    Log((reason or "Path failed") .. " (" .. PathFailCount .. "/" .. MAX_PATH_FAILS .. ")")
+
+    if PathFailCount >= MAX_PATH_FAILS then
+        ResetCharacterBecauseStuck()
+        return true
+    end
+
+    return false
+end
+
+local function EquipTool(toolName)
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+    if not character or not backpack then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return false
+    end
+
+    if character:FindFirstChild(toolName) then
+        return true
+    end
+
+    local tool = backpack:FindFirstChild(toolName)
+    if not tool then
+        Log("EquipTool: tool not found -> " .. toolName)
+        return false
+    end
+
+    pcall(function()
+        humanoid:EquipTool(tool)
+    end)
+
+    task.wait(0.2)
+
+    return character:FindFirstChild(toolName) ~= nil
+end
+
+local function EnsureCrowbarEquipped()
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChild("Crowbar") then
+        return true
+    end
+
+    local equipped = EquipTool("Crowbar")
+    if equipped and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Crowbar") then
+        return true
+    end
+
+    Log("Failed to equip crowbar")
+    return false
+end
+
+--// MOVE TO TARGET
+local function MoveToTarget(targetPart)
+    RiseToTargetY()
+
+    local character = LocalPlayer.Character
+    if not character then
+        Log("MoveToTarget: no character")
+        RegisterPathFail("No character")
+        return false
+    end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then
+        Log("MoveToTarget: no HRP or Humanoid")
+        RegisterPathFail("No HRP or Humanoid")
+        return false
+    end
+
+    if not targetPart or not targetPart:IsA("BasePart") then
+        Log("MoveToTarget: invalid target")
+        RegisterPathFail("Invalid target")
+        return false
+    end
+
+    CurrentTargetPart = targetPart
+    IsMovingToTarget = true
+    SomeFlag2 = false
+    StatusText = "Path to target"
+
+    local startPos = hrp.Position
+    local targetFrontPos = GetPositionInFrontOfTarget(targetPart, startPos)
+
+    if not targetFrontPos then
+        Log("MoveToTarget: failed to calculate front position")
+        IsMovingToTarget = false
+        StatusText = "Waiting"
+        RegisterPathFail("Front position failed")
+        return false
+    end
+
+    local endPos = targetFrontPos
+    Log("Searching path to target, distance " .. math.floor((endPos - startPos).Magnitude))
+
+    local path = ComputePath(startPos, endPos)
+    if not path or #path == 0 then
+        Log("MoveToTarget: path not found")
+        IsMovingToTarget = false
+        StatusText = "Waiting"
+        RegisterPathFail("Path not found")
+        return false
+    end
+
+    Log("Path found, waypoints: " .. #path)
+    VisualizePath(path, startPos)
+
+    local moveStartTime = tick()
+    local MOVE_TIMEOUT = 45
+
+    for _, waypoint in ipairs(path) do
+        if not Settings.Enabled then
+            ClearPathVisuals()
+            IsMovingToTarget = false
+            StatusText = "Waiting"
+            return false
+        end
+
+        if (tick() - moveStartTime) > MOVE_TIMEOUT then
+            Log("MoveToTarget: timeout")
+            ClearPathVisuals()
+            IsMovingToTarget = false
+            StatusText = "Waiting"
+            RegisterPathFail("Move timeout")
+            return false
+        end
+
+        local targetPos = waypoint.Position
+        local targetHRP = targetPos + Vector3.new(0, 2.5, 0)
+        local currentRot = hrp.CFrame - hrp.CFrame.Position
+        local targetCF = CFrame.new(targetHRP) * currentRot
+        local dist = (targetHRP - hrp.Position).Magnitude
+
+        if dist > 0.2 then
+            local tween = TweenService:Create(
+                hrp,
+                TweenInfo.new(dist / Settings.MoveSpeed, Enum.EasingStyle.Linear),
+                { CFrame = targetCF }
+            )
+            tween:Play()
+            tween.Completed:Wait()
+            LastTick = tick()
+        end
+
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            humanoid.Jump = true
+            task.wait(0.1)
+        end
+    end
+
+    ClearPathVisuals()
+
+    local finalPos = endPos
+    local finalHRP = finalPos + Vector3.new(0, 2.5, 0)
+    hrp.CFrame = CFrame.new(finalHRP) * CFrame.Angles(0, math.rad(90), 0)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    Log("Target reached")
+    IsMovingToTarget = false
+    StatusText = "Waiting"
+    ResetPathFails()
+    return true
+end
+
+
+--==================================================
+-- FLY MOVE MODE (FINAL + ETA + CAMERA + SOUND)
+--==================================================
+
+flySpd = flySpd or 55
+FlyRUNS = { Rag = nil }
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local SoundService = game:GetService("SoundService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+local evFolderFly = ReplicatedStorage:FindFirstChild("Events")
+local flyEv = evFolderFly and evFolderFly:FindFirstChild("RZDONL")
+local ragEv = evFolderFly and evFolderFly:FindFirstChild("__RZDONL")
+
+--========================================
+-- 🔥 ANTISTUCK
+--========================================
+local FlyFailCount = 0
+local MAX_FLY_FAILS = 20
+
+--========================================
+-- 🔇 TRUE GLOBAL SOUND KILL (FIXED)
+--========================================
+
+local RunService = game:GetService("RunService")
+
+local SoundKillRunning = false
+local SoundKillLoop
+
+local function KillSound(s)
+	if not s:IsA("Sound") then return end
+
+	-- instant kill
+	pcall(function()
+		s:Stop()
+	end)
+
+	s.Volume = 0
+	s.Playing = false
+
+	-- block future plays
+	s:GetPropertyChangedSignal("Playing"):Connect(function()
+		if s.Playing then
+			s:Stop()
+		end
+	end)
+
+	s:GetPropertyChangedSignal("Volume"):Connect(function()
+		if s.Volume ~= 0 then
+			s.Volume = 0
+		end
+	end)
+end
+
+local function EnableSoundKill()
+	if SoundKillRunning then return end
+	SoundKillRunning = true
+
+	-- kill ALL current sounds
+	for _, v in ipairs(game:GetDescendants()) do
+		KillSound(v)
+	end
+
+	-- kill NEW sounds instantly
+	game.DescendantAdded:Connect(function(v)
+		if SoundKillRunning then
+			KillSound(v)
+		end
+	end)
+
+	-- safety loop (handles weird replays / engine sounds)
+	SoundKillLoop = RunService.Heartbeat:Connect(function()
+		if not SoundKillRunning then return end
+
+		for _, s in ipairs(game:GetDescendants()) do
+			if s:IsA("Sound") then
+				if s.Playing then
+					pcall(function() s:Stop() end)
+				end
+				if s.Volume ~= 0 then
+					s.Volume = 0
+				end
+			end
+		end
+	end)
+end
+
+local function DisableSoundKill()
+	SoundKillRunning = false
+
+	if SoundKillLoop then
+		SoundKillLoop:Disconnect()
+		SoundKillLoop = nil
+	end
+end
+
+--========================================
+-- BLACK SCREEN LOADING UI
+--========================================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FlyBlackScreen"
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = game:GetService("CoreGui")
+
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.new(1, 0, 1, 0)
+Frame.BackgroundColor3 = Color3.new(0, 0, 0)
+Frame.BackgroundTransparency = 1 -- start hidden
+Frame.Parent = ScreenGui
+
+local Text = Instance.new("TextLabel")
+Text.Size = UDim2.new(1, 0, 1, 0)
+Text.BackgroundTransparency = 1
+Text.TextColor3 = Color3.new(1, 1, 1)
+Text.TextScaled = true
+Text.Font = Enum.Font.GothamBold
+Text.Text = ""
+Text.Parent = Frame
+
+local LoadingRunning = false
+local LoadingThread
+
+local function ShowBlackScreen()
+	if LoadingRunning then return end
+	LoadingRunning = true
+
+	for i = 1, 10 do
+	Frame.BackgroundTransparency = 1 - (i * 0.1)
+	task.wait(0.02)
+end
+
+	LoadingThread = task.spawn(function()
+		local dots = {".", "..", "..."}
+		local i = 1
+
+		while LoadingRunning do
+			Text.Text = "Going To Target" .. dots[i]
+
+			i += 1
+			if i > #dots then
+				i = 1
+			end
+
+			task.wait(0.4)
+		end
+	end)
+end
+
+local function HideBlackScreen()
+	LoadingRunning = false
+
+	if LoadingThread then
+		task.cancel(LoadingThread)
+		LoadingThread = nil
+	end
+
+	Frame.BackgroundTransparency = 1
+	Text.Text = ""
+end
+
+--========================
+-- NOCIP
+--========================
+local function SetNoclip(state)
+	local char = LocalPlayer.Character
+	if not char then return end
+
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = not state
+		end
+	end
+end
+
+--========================
+-- STOP
+--========================
+local function StopFlyMove()
+	if FlyRUNS.Rag then
+		FlyRUNS.Rag:Disconnect()
+		FlyRUNS.Rag = nil
+	end
+
+	SetNoclip(false)
+	DisableSoundKill()
+
+	RunService:UnbindFromRenderStep("FlyCamLock")
+	RunService:UnbindFromRenderStep("FlyETA")
+
+	local cam = workspace.CurrentCamera
+	if cam then
+		cam.CameraType = Enum.CameraType.Custom
+	end
+
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Velocity = Vector3.zero
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+
+--========================
+-- ALIVE
+--========================
+local function IsAliveForFly()
+	local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	return hum and hum.Health > 0
+end
+
+--========================
+-- STIFF
+--========================
+local function MakeFlyStiff()
+	local char = LocalPlayer.Character
+	if not char then return end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.AutoRotate = false
+		for _, t in ipairs(hum:GetPlayingAnimationTracks()) do
+			t:Stop(0)
+		end
+	end
+
+	for _, p in ipairs(char:GetChildren()) do
+		if p:IsA("BasePart") then
+			p.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
+--========================
+-- RAG LOOP
+--========================
+local function StartFlyRagLoop()
+	if not ragEv or FlyRUNS.Rag then return end
+
+	FlyRUNS.Rag = RunService.RenderStepped:Connect(function()
+		if not Settings.Enabled or not IsMovingToTarget or not IsAliveForFly() then
+			return
+		end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+
+		SetNoclip(true)
+
+		pcall(function()
+			ragEv:FireServer("__---r", Vector3.zero, hrp.CFrame, false)
+		end)
+
+		MakeFlyStiff()
+	end)
+end
+
+--========================
+-- FLY TO POS
+--========================
+local function FlyToPosition(targetPos, timeout)
+	local start = tick()
+	local lastPos = nil
+	local stuckTime = 0
+
+	while Settings.Enabled and IsMovingToTarget and IsAliveForFly() do
+		SetNoclip(true)
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return false end
+
+		local offset = targetPos - hrp.Position
+		local dist = offset.Magnitude
+
+		if dist <= 2 then
+			return true
+		end
+
+		if tick() - start > timeout then
+			FlyFailCount += 1
+			return false
+		end
+
+		if lastPos then
+			if (hrp.Position - lastPos).Magnitude < 0.5 then
+				stuckTime += RunService.RenderStepped:Wait()
+				if stuckTime > 0.4 then
+					hrp.CFrame = hrp.CFrame + Vector3.new(
+						math.random(-3,3), 2, math.random(-3,3)
+					)
+					stuckTime = 0
+				end
+			else
+				stuckTime = 0
+			end
+		end
+
+		lastPos = hrp.Position
+
+		local dir = offset.Unit
+		hrp.AssemblyLinearVelocity = dir * flySpd
+		hrp.AssemblyAngularVelocity = Vector3.zero
+
+		if flyEv then
+			pcall(function()
+				flyEv:FireServer("---r", Vector3.zero, hrp.CFrame, false)
+			end)
+		end
+
+		MakeFlyStiff()
+		RunService.RenderStepped:Wait()
+	end
+
+	return false
+end
+
+--========================
+-- 🎯 FINAL POSITION SNAP (3x CONFIRM)
+--========================
+local function SnapToPosition(hrp, targetPos)
+	for i = 1, 3 do
+		hrp.CFrame = CFrame.new(targetPos)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+		task.wait(0.05)
+	end
+end
+
+--========================
+-- MAIN
+--========================
+
+local function TeleportToTarget(targetPart)
+	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	local hum = char:FindFirstChildOfClass("Humanoid")
+
+	if not hrp or not hum or not targetPart then return false end
+
+	-- RESET FIRST
+	StopFlyMove()
+
+	IsMovingToTarget = true
+	StatusText = "Flying"
+
+	local startPos = hrp.Position
+	local frontPos = GetPositionInFrontOfTarget(targetPart, startPos) or targetPart.Position
+	local finalPos = frontPos + Vector3.new(0, 2.5, 0)
+
+	local path = ComputePath(startPos, finalPos)
+	if not path or #path == 0 then
+		IsMovingToTarget = false
+		return false
+	end
+
+	-- START SYSTEMS
+	StartFlyRagLoop()
+	EnableSoundKill()
+	ShowBlackScreen()
+
+	local success = true
+
+	for _, waypoint in ipairs(path) do
+		if not Settings.Enabled then
+			success = false
+			break
+		end
+
+		local wpPos = waypoint.Position + Vector3.new(0, 2.5, 0)
+
+		if waypoint.Action == Enum.PathWaypointAction.Jump then
+			hum.Jump = true
+		end
+
+		if not FlyToPosition(wpPos, 8) then
+			if FlyFailCount >= MAX_FLY_FAILS then
+				Log("Fly failed → reset")
+
+				local pos = hrp.Position
+				hrp.CFrame = CFrame.new(pos.X, Settings.TargetY, pos.Z)
+
+				FlyFailCount = 0
+				success = false
+				break
+			end
+		end
+	end
+
+	if success then
+		FlyToPosition(finalPos, 10)
+		FlyFailCount = 0
+	end
+
+	-- FINAL STOP
+	StopFlyMove()
+	IsMovingToTarget = false
+
+	HideBlackScreen()
+
+	-- FINAL SNAP (3x)
+	if hrp then
+		SnapToPosition(hrp, finalPos)
+	end
+
+	if hum then
+		hum.PlatformStand = false
+		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+
+	return success
+end
+--========================
+-- ROUTER
+--========================
+local function GoToTarget(targetPart)
+	if Settings.FarmMethod == "Teleport" or Settings.FarmMethod == "Method 2" then
+		return TeleportToTarget(targetPart)
+	end
+
+	return MoveToTarget(targetPart)
+end
+
+local function HasTool(toolName)
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local character = LocalPlayer.Character
+    return (backpack and backpack:FindFirstChild(toolName)) 
+        or (character and character:FindFirstChild(toolName))
+end
+
+-- wait until humanoid is stable (NOT ragdolled)
+local function WaitForStableHumanoid(hum)
+    local start = tick()
+
+    while tick() - start < 2 do
+        if hum and hum.Parent then
+            local state = hum:GetState()
+
+            if state ~= Enum.HumanoidStateType.Freefall
+            and state ~= Enum.HumanoidStateType.FallingDown
+            and state ~= Enum.HumanoidStateType.Ragdoll then
+                return true
+            end
+        end
+        task.wait()
+    end
+
+    return false
+end
+
+local function EquipTool(toolName)
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+    if not char or not hum or not backpack then return false end
+
+    -- 🔥 WAIT UNTIL NO RAGDOLL
+    WaitForStableHumanoid(hum)
+    task.wait(0.1)
+
+    local tool = backpack:FindFirstChild(toolName)
+    if not tool then return false end
+
+    -- 🔁 retry equip (some games reject first call)
+    for i = 1, 3 do
+        pcall(function()
+            hum:EquipTool(tool)
+        end)
+
+        task.wait(0.15)
+
+        if char:FindFirstChild(toolName) then
+            return true -- success
+        end
+    end
+
+    return false
+end
+
+local function FindCrowbarDealer()
+    local map = Workspace:FindFirstChild("Map")
+    if not map then
+        Log("Map not found")
+        return nil
+    end
+
+    local shops = map:FindFirstChild("Shopz")
+    if not shops then
+        Log("Shops not found")
+        return nil
+    end
+
+    local character = LocalPlayer.Character
+    if not character then
+        return nil
+    end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        return nil
+    end
+
+    local closestDealer = nil
+    local closestDist = math.huge
+
+    for _, shop in ipairs(shops:GetChildren()) do
+        local stocks = shop:FindFirstChild("CurrentStocks")
+        if stocks then
+            local crowbarStock = stocks:FindFirstChild("Crowbar")
+            if crowbarStock and crowbarStock.Value > 0 then
+                local mainPart = shop:FindFirstChild("MainPart")
+                if mainPart then
+                    local dist = (hrp.Position - mainPart.Position).Magnitude
+                    if dist < closestDist then
+                        closestDist = dist
+                        closestDealer = shop
+                    end
+                end
+            end
+        end
+    end
+
+    if closestDealer then
+        Log("Dealer found with crowbar, distance: " .. math.floor(closestDist))
+    else
+        Log("No dealer with scrap metal found")
+    end
+
+    return closestDealer
+end
+
+local function BuyCrowbar()
+    local dealer = FindCrowbarDealer()
+    if not dealer then
+        return false
+    end
+
+    local mainPart = dealer:FindFirstChild("MainPart")
+    if not mainPart then
+        Log("The dealer doesn't have it MainPart")
+        return false
+    end
+
+    StatusText = "The path to the dealer"
+    Log("I'm going to the dealer")
+
+    RetryCount = 0
+    LastShopMainPart = mainPart
+    local moveSuccess = GoToTarget(mainPart)
+
+    if not moveSuccess then
+        RetryCount = RetryCount + 1
+        Log("Path not found, attempting " .. RetryCount .. "/3")
+
+        if RetryCount >= 3 then
+            Log("Path not found 3 times, climbing to height 4.8")
+            local character = LocalPlayer.Character
+            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local pos = hrp.Position
+                local tween = TweenService:Create(
+                    hrp,
+                    TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
+                    { CFrame = CFrame.new(pos.X, 4.8, pos.Z) }
+                )
+                tween:Play()
+                tween.Completed:Wait()
+                task.wait(1)
+                Log("Trying again to find the way to the dealer")
+                RetryCount = 0
+                moveSuccess = GoToTarget(mainPart)
+                if not moveSuccess then
+                    Log("The path to the dealer is still not found, I'm temporarily ignoring it")
+                    StatusText = "Waiting"
+                    return false
+                end
+            end
+        else
+            StatusText = "Waiting"
+            return false
+        end
+    end
+
+    StatusText = "Buying Crowbar"
+    task.wait(0.5)
+
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    if events then
+        Log("I'm opening a store")
+        pcall(function()
+            events.BYZERSPROTEC:FireServer(true, "shop", mainPart, "IllegalStore")
+        end)
+        task.wait(1)
+        Log("I buy")
+        pcall(function()
+            events.SSHPRMTE1:InvokeServer("IllegalStore", "Melees", "Crowbar", mainPart, nil, true)
+        end)
+        task.wait(2)
+        Log("Closing shop")
+        pcall(function()
+            events.BYZERSPROTEC:FireServer(false)
+        end)
+    end
+
+    task.wait(0.6)
+    local crowbar = HasTool("Crowbar")
+    if crowbar then
+        Log("Crowbar purchased successfully")
+    else
+        Log("Failed to purchase crowbar")
+    end
+
+    LastTick = tick()
+    StatusText = "Waiting"
+    return crowbar
+end
+
+local function CleanupTempIgnored()
+    local now = tick()
+    for obj, expiry in pairs(Settings.TempIgnored) do
+        if now > expiry then
+            Settings.TempIgnored[obj] = nil
+            for i, v in ipairs(Settings.IgnoredList) do
+                if v == obj then
+                    table.remove(Settings.IgnoredList, i)
+                    break
+                end
+            end
+            Log("Ignored object unlocked")
+        end
+    end
+end
+
+local function UpdateTargetsList()
+    CleanupTempIgnored()
+
+    local bredFolder = nil
+    local map = Workspace:FindFirstChild("Map")
+    if map then
+        bredFolder = map:FindFirstChild("BredMakurz")
+    end
+    if not bredFolder then
+        local filter = Workspace:FindFirstChild("Filter")
+        if filter then
+            bredFolder = filter:FindFirstChild("BredMakurz")
+        end
+    end
+    if not bredFolder then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "BredMakurz" and obj:IsA("Folder") then
+                bredFolder = obj
+                break
+            end
+        end
+    end
+    if not bredFolder then
+        Log("BredMakurz folder not found")
+        return 0, 0
+    end
+
+    local character = LocalPlayer.Character
+    if not character then
+        return 0, 0
+    end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        return 0, 0
+    end
+
+    local safes = {}
+    local registers = {}
+    TotalSafesCount = 0
+    TotalRegistersCount = 0
+    SortedTargets = {}
+
+    for _, obj in ipairs(bredFolder:GetChildren()) do
+        local nameLower = obj.Name:lower()
+        if nameLower:find("safe") or nameLower:find("register") then
+            if nameLower:find("safe") then
+                TotalSafesCount = TotalSafesCount + 1
+            else
+                TotalRegistersCount = TotalRegistersCount + 1
+            end
+
+            if Settings.ProcessedList[obj] then
+                continue
+            end
+            if Settings.TempIgnored[obj] then
+                continue
+            end
+
+            local values = obj:FindFirstChild("Values")
+            if values then
+                local broken = values:FindFirstChild("Broken")
+                if broken and not broken.Value then
+                    local mainPart = obj:FindFirstChild("MainPart") or obj.PrimaryPart
+                    if mainPart and mainPart.Position.Y >= 4.8 then
+                        local targetInfo = { obj = obj, part = mainPart, pos = mainPart.Position }
+                        if nameLower:find("safe") then
+                            table.insert(safes, targetInfo)
+                        else
+                            table.insert(registers, targetInfo)
+                        end
+                        table.insert(SortedTargets, targetInfo)
+                    end
+                end
+            end
+        end
+    end
+
+    AvailableSafes = safes
+    AvailableRegisters = registers
+
+    table.sort(SortedTargets, function(a, b)
+        return (a.pos - hrp.Position).Magnitude < (b.pos - hrp.Position).Magnitude
+    end)
+
+    AvailableSafesCount = #safes
+    AvailableRegistersCount = #registers
+    return AvailableSafesCount + AvailableRegistersCount, TotalSafesCount + TotalRegistersCount
+end
+
+local function AnalyzeTargetsCount()
+    local available, total = UpdateTargetsList()
+    TotalAvailableTargets = available
+    Log("Total available: " .. available .. "/" .. total .. " Targets")
+
+    if available < 20 then
+        SuggestionText = "Few goals (" .. available .. "), There are a lot of competitors. Change the server.."
+        Log("⚠️ " .. SuggestionText)
+        pcall(function()
+            HttpService:SetCore("SendNotification", {
+                Title = "Recommendation",
+                Text = SuggestionText,
+                Duration = 10
+            })
+        end)
+    else
+        SuggestionText = "no (" .. available .. "), no"
+    end
+end
+
+AnalyzeTargetsCount()
+
+local function FindMoneyNearTarget(targetObj)
+    local mainPart = targetObj:FindFirstChild("MainPart") or targetObj.PrimaryPart
+    if not mainPart then
+        return {}
+    end
+
+    local spawnedBread = Workspace:FindFirstChild("Filter") and Workspace.Filter:FindFirstChild("SpawnedBread")
+    if not spawnedBread then
+        return {}
+    end
+
+    local moneyParts = {}
+    for _, bread in ipairs(spawnedBread:GetChildren()) do
+        if bread:IsA("BasePart") and bread.Parent and bread.Transparency < 1 then
+            if (bread.Position - mainPart.Position).Magnitude <= 25 then
+                table.insert(moneyParts, bread)
+            end
+        end
+    end
+
+    return moneyParts
+end
+
+local function CollectMoneyNearTarget(targetObj)
+    StatusText = "Collecting money"
+
+    local maxCollectTime = 15
+    local stallLimit = 3
+    local startTime = tick()
+    local stalledPasses = 0
+    local lastCount = math.huge
+
+    while Settings.Enabled and (tick() - startTime) < maxCollectTime do
+        local moneyParts = FindMoneyNearTarget(targetObj)
+        local currentCount = #moneyParts
+
+        if currentCount == 0 then
+            StatusText = "Waiting"
+            return false
+        end
+
+        Log("Nearby cash detected: " .. currentCount)
+
+        for _, money in ipairs(moneyParts) do
+            if not Settings.Enabled then
+                StatusText = "Waiting"
+                return false
+            end
+
+            if money and money.Parent and money.Transparency < 1 then
+                GoToTarget(money)
+
+                local pickupEvent = ReplicatedStorage:FindFirstChild("Events") and ReplicatedStorage.Events:FindFirstChild("CZDPZUS")
+                if pickupEvent then
+                    pcall(function()
+                        pickupEvent:FireServer(money)
+                    end)
+                end
+
+                local waited = 0
+                while money and money.Parent and waited < 0.8 do
+                    task.wait(0.1)
+                    waited += 0.1
+                end
+            end
+        end
+
+        task.wait(0.35)
+
+        local remainingCount = #FindMoneyNearTarget(targetObj)
+        if remainingCount == 0 then
+            StatusText = "Waiting"
+            return false
+        end
+
+        if remainingCount < lastCount then
+            stalledPasses = 0
+        else
+            stalledPasses += 1
+        end
+
+        lastCount = remainingCount
+
+        if stalledPasses >= stallLimit then
+            Log("Collection stalled, moving on")
+            StatusText = "Waiting"
+            return remainingCount > 0
+        end
+    end
+
+    Log("Collection timeout reached, moving on")
+    StatusText = "Waiting"
+    return #FindMoneyNearTarget(targetObj) > 0
+end
+
+local function WaitForStableCharacter()
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then
+        humanoid.AutoRotate = true
+        humanoid.PlatformStand = false
+    end
+
+    if hrp then
+        hrp.Velocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    task.wait(0.35)
+end
+
+local function EnsureCrowbarEquipped()
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+    if not character or not backpack then
+        return false
+    end
+
+    if character:FindFirstChild("Crowbar") then
+        return true
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local crowbar = backpack:FindFirstChild("Crowbar")
+
+    if not humanoid or not crowbar then
+        return false
+    end
+
+    for _ = 1, 6 do
+        pcall(function()
+            humanoid:EquipTool(crowbar)
+        end)
+
+        task.wait(0.25)
+
+        if character:FindFirstChild("Crowbar") then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function HackSafe(safeObj)
+    if not HasTool("Crowbar") then
+        Log("I don't have a crowbar to open the safe, so I'm trying to buy one...")
+        local bought = BuyCrowbar()
+        if not bought then
+            Log("Failed to purchase crowbar, I miss the safe")
+            return false
+        end
+    end
+
+    WaitForStableCharacter()
+
+    if not EnsureCrowbarEquipped() then
+        Log("Failed to equip crowbar after reaching target")
+        return false
+    end
+
+    if not HasTool("Crowbar") then
+        Log("The crowbar never showed up, I'm skipping it")
+        return false
+    end
+
+    task.wait(0.5)
+
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    if not events then
+        Log("Events folder not found")
+        return false
+    end
+
+    local remote1 = events:FindFirstChild("XMHH.2")
+    local remote2 = events:FindFirstChild("XMHH2.2")
+    local mainPart = safeObj:FindFirstChild("MainPart") or safeObj.PrimaryPart
+
+    if not remote1 or not remote2 then
+        Log("Remote events no hacking methods found")
+        return false
+    end
+
+    if not mainPart then
+        Log("The safe has no main part")
+        return false
+    end
+
+    Log("Starting safe hack")
+    StatusText = "no "
+
+    local startTime = tick()
+    local hits = 0
+
+    while Settings.Enabled and safeObj and safeObj.Parent do
+        local values = safeObj:FindFirstChild("Values")
+        if not values then
+            break
+        end
+
+        local broken = values:FindFirstChild("Broken")
+        if broken and broken.Value then
+            Log("Safe already opened")
+            break
+        end
+
+        if tick() - startTime > 25 then
+            Log("Hack timeout")
+            break
+        end
+
+        task.wait(0.4)
+
+        local character = LocalPlayer.Character
+        local crowbar = character and character:FindFirstChild("Crowbar")
+
+        if not crowbar then
+            if not EnsureCrowbarEquipped() then
+                Log("Crowbar unequipped and failed to re-equip")
+                break
+            end
+
+            character = LocalPlayer.Character
+            crowbar = character and character:FindFirstChild("Crowbar")
+        end
+
+        if not crowbar then
+            break
+        end
+
+        local arm = character and (character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand"))
+        if not arm then
+            break
+        end
+
+        local success, result = pcall(function()
+            return remote1:InvokeServer("🍞", tick(), crowbar, "DZDRRRKI", safeObj, "Register")
+        end)
+
+        if success and result then
+            pcall(function()
+                remote2:FireServer(
+                    "🍞",
+                    tick(),
+                    crowbar,
+                    "2389ZFX34",
+                    result,
+                    false,
+                    arm,
+                    mainPart,
+                    safeObj,
+                    mainPart.Position,
+                    mainPart.Position
+                )
+            end)
+
+            hits += 1
+        end
+
+        if hits % 4 == 0 then
+            task.wait(0.8)
+        end
+
+        LastTick = tick()
+    end
+
+    task.wait(0.6)
+    Log("Hack complete, hits: " .. hits)
+    StatusText = "Waiting"
+
+    return true
+end
+
+local IsRespawning = false
+local RespawnConnection = nil
+
+local function PressE()
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+    task.wait(0.08)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+end
+
+local function StopRespawnHandler()
+    if RespawnConnection then
+        RespawnConnection:Disconnect()
+        RespawnConnection = nil
+    end
+
+    IsRespawning = false
+end
+
+local function StartRespawnHandler()
+    if IsRespawning then
+        return
+    end
+
+    IsRespawning = true
+    Log("Death detected - pressing E to respawn")
+    StatusText = "died"
+
+    if RespawnConnection then
+        RespawnConnection:Disconnect()
+        RespawnConnection = nil
+    end
+
+    local startedAt = tick()
+    local lastPressAt = 0
+
+    RespawnConnection = RunService.Heartbeat:Connect(function()
+        if not IsRespawning then
+            if RespawnConnection then
+                RespawnConnection:Disconnect()
+                RespawnConnection = nil
+            end
+            return
+        end
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChild("Humanoid")
+
+        if character and humanoid and humanoid.Health > 0 then
+            StopRespawnHandler()
+            StatusText = "Waiting"
+            Log("Respawn detected, stopping handler")
+            return
+        end
+
+        if tick() - startedAt < 0.6 then
+            return
+        end
+
+        if tick() - lastPressAt >= 0.3 then
+            lastPressAt = tick()
+
+            local ok, err = pcall(function()
+                PressE()
+            end)
+
+            if ok then
+                Log("Pressed E for respawn")
+            else
+                Log("PressE failed: " .. tostring(err))
+            end
+        end
+    end)
+end
+
+local function OnCharacterAdded(newChar)
+    StopRespawnHandler()
+    Settings.IsDead = false
+    task.wait(3)
+    IsRising = false
+    HasReachedTargetY = false
+
+    if Settings.Enabled then
+        LastTick = tick()
+        RiseToTargetY()
+        Log("Character respawned, continuing")
+        StatusText = "Waiting"
+    end
+
+    local humanoid = newChar:WaitForChild("Humanoid", 5)
+    if humanoid then
+        humanoid.Died:Connect(StartRespawnHandler)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(OnCharacterAdded)
+if LocalPlayer.Character then
+    OnCharacterAdded(LocalPlayer.Character)
+end
+
+local BrokenStartedAt = {}
+
+local function GetBrokenResetTime(obj)
+    local name = string.lower(obj.Name)
+
+    if name:find("register") then
+        return 10 * 60
+    end
+
+    return 12 * 60
+end
+
+local function FormatTimeLeft(secondsLeft)
+    secondsLeft = math.max(0, math.floor(secondsLeft))
+    local minutes = math.floor(secondsLeft / 60)
+    local seconds = secondsLeft % 60
+    return string.format("%02d:%02d", minutes, seconds)
+end
+
+
+--======================= TEXT ONLY ESP - TIGHT =========================--
+
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = game:GetService("Players").LocalPlayer
+
+local EspEnabled = false
+local EspConnection = nil
+local SafeTimers = {}
+local EspElements = {}
+
+local function FormatName(name)
+    name = string.gsub(name, "([a-z])([A-Z])", "%1 %2")
+    local u = string.find(name, "_")
+    if u then name = string.sub(name, 1, u-1) end
+    return name
+end
+
+local function GetBrokenValue(v)
+    local values = v:FindFirstChild("Values")
+    if values then
+        local b = values:FindFirstChild("Broken")
+        if b and b:IsA("BoolValue") then return b.Value end
+    end
+    local i = v:FindFirstChild("Interact")
+    if i then
+        local a = i:GetAttribute("Broken")
+        if a ~= nil then return a == true end
+    end
+    return false
+end
+
+local function GetMainPart(v)
+    return v:FindFirstChild("MainPart") 
+        or v.PrimaryPart 
+        or v:FindFirstChild("RegisterMain") 
+        or v:FindFirstChildOfClass("BasePart")
+        or v:FindFirstChild("Part")
+        or v:FindFirstChild("Collision")
+end
+
+local function CreateTextESP(v)
+    if EspElements[v] then return EspElements[v] end
+
+    local mainPart = GetMainPart(v)
+    if not mainPart then return nil end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Adornee = mainPart
+    billboard.Size = UDim2.new(0, 180, 0, 55)   -- tight height
+    billboard.StudsOffset = Vector3.new(0, 4, 0)
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = 2000
+    billboard.LightInfluence = 0
+    billboard.Parent = v
+
+    local title = Instance.new("TextLabel", billboard)
+    title.Size = UDim2.new(1,0,0,22)
+    title.Position = UDim2.new(0,0,0,0)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(255,255,255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextXAlignment = Enum.TextXAlignment.Center
+
+    local distance = Instance.new("TextLabel", billboard)
+    distance.Size = UDim2.new(1,0,0,16)
+    distance.Position = UDim2.new(0,0,0,22)
+    distance.BackgroundTransparency = 1
+    distance.TextColor3 = Color3.fromRGB(170,180,200)
+    distance.Font = Enum.Font.Gotham
+    distance.TextSize = 13
+    distance.TextXAlignment = Enum.TextXAlignment.Center
+
+    local status = Instance.new("TextLabel", billboard)
+    status.Size = UDim2.new(1,0,0,18)
+    status.Position = UDim2.new(0,0,0,38)
+    status.BackgroundTransparency = 1
+    status.Font = Enum.Font.GothamSemibold
+    status.TextSize = 14
+    status.TextXAlignment = Enum.TextXAlignment.Center
+
+    EspElements[v] = {billboard = billboard, title = title, distance = distance, status = status}
+    return EspElements[v]
+end
+
+local function UpdateESP(delta)
+    if not EspEnabled then return end
+
+    local bredFolder = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("BredMakurz")
+    if not bredFolder then return end
+
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    for _, v in pairs(bredFolder:GetChildren()) do
+        local nameLower = v.Name:lower()
+        if nameLower:find("safe") or nameLower:find("register") then
+            local isBroken = GetBrokenValue(v)
+            local isSafe = nameLower:find("safe")
+
+            if isBroken then
+                if not SafeTimers[v.Name] then SafeTimers[v.Name] = 720 end
+                if SafeTimers[v.Name] > 0 then SafeTimers[v.Name] = SafeTimers[v.Name] - delta end
+            else
+                SafeTimers[v.Name] = nil
+            end
+
+            local mainPart = GetMainPart(v)
+            if mainPart then
+                local esp = CreateTextESP(v)
+                if esp then
+                    esp.title.Text = (isSafe and "🔒 " or "💰 ") .. FormatName(v.Name)
+
+                    local dist = math.floor((mainPart.Position - hrp.Position).Magnitude / 3)
+                    esp.distance.Text = dist .. "m"
+
+                    if isBroken and SafeTimers[v.Name] and SafeTimers[v.Name] > 0 then
+                        local p = SafeTimers[v.Name]
+                        local m = math.floor(p / 60)
+                        local s = math.floor(p % 60)
+                        esp.status.Text = string.format("[COOLDOWN] %02d:%02d", m, s)
+                        esp.status.TextColor3 = Color3.fromRGB(255, 140, 60)
+                    else
+                        esp.status.Text = "[READY]"
+                        esp.status.TextColor3 = Color3.fromRGB(0, 255, 130)
+                    end
+                end
+            end
+        end
+    end
+
+    for obj, data in pairs(EspElements) do
+        if not obj or not obj.Parent then
+            if data.billboard then data.billboard:Destroy() end
+            EspElements[obj] = nil
+            SafeTimers[obj and obj.Name] = nil
+        end
+    end
+end
+
+local function EnableESP()
+    if EspEnabled then return end
+    EspEnabled = true
+    local last = tick()
+    EspConnection = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        UpdateESP(now - last)
+        last = now
+    end)
+end
+
+local function DisableESP()
+    if not EspEnabled then return end
+    EspEnabled = false
+    if EspConnection then EspConnection:Disconnect() end
+    for _, data in pairs(EspElements) do
+        if data.billboard then data.billboard:Destroy() end
+    end
+    EspElements = {}
+    SafeTimers = {}
+end
+-- Premium Player esp wwwwwwwwwwwwwwwwwwwwwwwwww
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local ESPConfig = {
+	Enabled = true,
+	ShowDistance = true,
+	MaxDistance = 1500,
+
+	BillboardWidth = 220,
+	BillboardHeight = 54,
+	StudsOffset = 3.2,
+
+	NameSize = 14,
+	InfoSize = 12,
+
+	FillTransparency = 0.82,
+	OutlineTransparency = 0.15,
+
+	BackgroundColor = Color3.fromRGB(15, 15, 20),
+	TextColor = Color3.fromRGB(255, 255, 255),
+	InfoColor = Color3.fromRGB(200, 200, 210),
+
+	HealthyColor = Color3.fromRGB(0, 170, 255),
+	LowColor = Color3.fromRGB(255, 170, 0),
+	DeadColor = Color3.fromRGB(255, 80, 80),
+	BarBackgroundColor = Color3.fromRGB(45, 45, 52),
+
+	HealthCap = 100,
+}
+
+local ESPObjects = {}
+
+local function getCharacterRoot(character: Model)
+	return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function clampHealth(humanoid: Humanoid): number
+	local cap = ESPConfig.HealthCap or 100
+	return math.clamp(math.floor(humanoid.Health), 0, cap)
+end
+
+local function getHealthPercent(humanoid: Humanoid): number
+	local cap = ESPConfig.HealthCap or 100
+	if cap <= 0 then
+		return 0
+	end
+	return math.clamp(humanoid.Health / cap, 0, 1)
+end
+
+local function removeESP(player: Player)
+	local data = ESPObjects[player]
+	if not data then
+		return
+	end
+
+	if data.Highlight then
+		data.Highlight:Destroy()
+	end
+
+	if data.Billboard then
+		data.Billboard:Destroy()
+	end
+
+	ESPObjects[player] = nil
+end
+
+local function applyVisualSettings(data)
+	if not data then
+		return
+	end
+
+	data.Highlight.FillTransparency = ESPConfig.FillTransparency
+	data.Highlight.OutlineTransparency = ESPConfig.OutlineTransparency
+
+	data.Billboard.MaxDistance = ESPConfig.MaxDistance
+	data.Billboard.Size = UDim2.new(0, ESPConfig.BillboardWidth, 0, ESPConfig.BillboardHeight)
+	data.Billboard.StudsOffset = Vector3.new(0, ESPConfig.StudsOffset, 0)
+
+	data.BG.BackgroundColor3 = ESPConfig.BackgroundColor
+	data.NameLabel.TextColor3 = ESPConfig.TextColor
+	data.InfoLabel.TextColor3 = ESPConfig.InfoColor
+
+	data.NameLabel.TextSize = ESPConfig.NameSize
+	data.InfoLabel.TextSize = ESPConfig.InfoSize
+end
+
+local function createESP(player: Player, character: Model)
+	if player == LocalPlayer then
+		return
+	end
+
+	local root = getCharacterRoot(character)
+	if not root then
+		return
+	end
+
+	removeESP(player)
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "PremiumESPHighlight"
+	highlight.Adornee = character
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = character
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "PremiumESPBillboard"
+	billboard.Adornee = root
+	billboard.AlwaysOnTop = true
+	billboard.LightInfluence = 0
+	billboard.Parent = character
+
+	local bg = Instance.new("Frame")
+	bg.Name = "BG"
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundTransparency = 0.2
+	bg.BorderSizePixel = 0
+	bg.Parent = billboard
+
+	local bgCorner = Instance.new("UICorner")
+	bgCorner.CornerRadius = UDim.new(0, 10)
+	bgCorner.Parent = bg
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 1.2
+	stroke.Transparency = 0.35
+	stroke.Parent = bg
+
+	local accent = Instance.new("Frame")
+	accent.Name = "Accent"
+	accent.Size = UDim2.new(0, 4, 1, 0)
+	accent.BorderSizePixel = 0
+	accent.Parent = bg
+
+	local accentCorner = Instance.new("UICorner")
+	accentCorner.CornerRadius = UDim.new(0, 10)
+	accentCorner.Parent = accent
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Name = "NameLabel"
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Position = UDim2.new(0, 12, 0, 5)
+	nameLabel.Size = UDim2.new(1, -16, 0, 22)
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.Parent = bg
+
+	local infoLabel = Instance.new("TextLabel")
+	infoLabel.Name = "InfoLabel"
+	infoLabel.BackgroundTransparency = 1
+	infoLabel.Position = UDim2.new(0, 12, 0, 26)
+	infoLabel.Size = UDim2.new(0, 110, 0, 18)
+	infoLabel.Font = Enum.Font.GothamMedium
+	infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+	infoLabel.Text = "Loading..."
+	infoLabel.Parent = bg
+
+	local distanceLabel = Instance.new("TextLabel")
+	distanceLabel.Name = "DistanceLabel"
+	distanceLabel.BackgroundTransparency = 1
+	distanceLabel.Position = UDim2.new(1, -92, 0, 26)
+	distanceLabel.Size = UDim2.new(0, 42, 0, 18)
+	distanceLabel.Font = Enum.Font.GothamMedium
+	distanceLabel.TextXAlignment = Enum.TextXAlignment.Right
+	distanceLabel.TextColor3 = ESPConfig.InfoColor
+	distanceLabel.TextSize = ESPConfig.InfoSize
+	distanceLabel.Text = "0m"
+	distanceLabel.Parent = bg
+
+	local barHolder = Instance.new("Frame")
+	barHolder.Name = "HealthBarHolder"
+	barHolder.AnchorPoint = Vector2.new(1, 0)
+	barHolder.Position = UDim2.new(1, -10, 0, 31)
+	barHolder.Size = UDim2.new(0, 36, 0, 8)
+	barHolder.BorderSizePixel = 0
+	barHolder.BackgroundColor3 = ESPConfig.BarBackgroundColor
+	barHolder.Parent = bg
+
+	local barHolderCorner = Instance.new("UICorner")
+	barHolderCorner.CornerRadius = UDim.new(1, 0)
+	barHolderCorner.Parent = barHolder
+
+	local barFill = Instance.new("Frame")
+	barFill.Name = "HealthBarFill"
+	barFill.Size = UDim2.new(1, 0, 1, 0)
+	barFill.BorderSizePixel = 0
+	barFill.Parent = barHolder
+
+	local barFillCorner = Instance.new("UICorner")
+	barFillCorner.CornerRadius = UDim.new(1, 0)
+	barFillCorner.Parent = barFill
+
+	ESPObjects[player] = {
+		Highlight = highlight,
+		Billboard = billboard,
+		BG = bg,
+		NameLabel = nameLabel,
+		InfoLabel = infoLabel,
+		DistanceLabel = distanceLabel,
+		HealthBarHolder = barHolder,
+		HealthBarFill = barFill,
+		Stroke = stroke,
+		Accent = accent,
+	}
+
+	applyVisualSettings(ESPObjects[player])
+end
+
+local function updateESP(player: Player)
+	local data = ESPObjects[player]
+	if not data then
+		return
+	end
+
+	local character = player.Character
+	local localCharacter = LocalPlayer.Character
+	if not character or not localCharacter then
+		return
+	end
+
+	local root = getCharacterRoot(character)
+	local localRoot = getCharacterRoot(localCharacter)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	if not root or not localRoot or not humanoid then
+		return
+	end
+
+	local distance = math.floor((root.Position - localRoot.Position).Magnitude)
+	local healthDisplay = clampHealth(humanoid)
+	local healthPercent = getHealthPercent(humanoid)
+
+	local isDead = humanoid.Health <= 0
+	local isLow = healthDisplay < 35
+
+	local stateColor = isDead and ESPConfig.DeadColor
+		or isLow and ESPConfig.LowColor
+		or ESPConfig.HealthyColor
+
+	data.Highlight.FillColor = stateColor
+	data.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+
+	data.Accent.BackgroundColor3 = stateColor
+	data.Stroke.Color = stateColor
+	data.HealthBarFill.BackgroundColor3 = stateColor
+	data.HealthBarHolder.BackgroundColor3 = ESPConfig.BarBackgroundColor
+
+	data.HealthBarFill.Size = UDim2.new(healthPercent, 0, 1, 0)
+
+	data.NameLabel.Text = player.DisplayName ~= player.Name
+		and string.format("%s (@%s)", player.DisplayName, player.Name)
+		or player.Name
+
+	data.InfoLabel.Text = string.format("HP: %d", healthDisplay)
+
+	data.DistanceLabel.Visible = ESPConfig.ShowDistance
+	data.DistanceLabel.TextColor3 = ESPConfig.InfoColor
+	if ESPConfig.ShowDistance then
+		data.DistanceLabel.Text = string.format("%dm", distance)
+	end
+
+	applyVisualSettings(data)
+end
+
+local function setupPlayer(player: Player)
+	if player == LocalPlayer then
+		return
+	end
+
+	local function onCharacter(character: Model)
+		task.wait(0.2)
+		createESP(player, character)
+	end
+
+	player.CharacterAdded:Connect(onCharacter)
+
+	if player.Character then
+		onCharacter(player.Character)
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+Players.PlayerRemoving:Connect(function(player)
+	removeESP(player)
+end)
+
+RunService.Heartbeat:Connect(function()
+	if not ESPConfig.Enabled then
+		for player in pairs(ESPObjects) do
+			removeESP(player)
+		end
+		return
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			if not ESPObjects[player] then
+				createESP(player, player.Character)
+			end
+			updateESP(player)
+		end
+	end
+end)
+
+local function SetupBrokenTracking()
+    Log("Launching goal analysis...")
+    BrokenStatusMap = {}
+    local bredFolder = nil
+    local map = Workspace:FindFirstChild("Map")
+    if map then
+        bredFolder = map:FindFirstChild("BredMakurz")
+    end
+    if not bredFolder then
+        local filter = Workspace:FindFirstChild("Filter")
+        if filter then
+            bredFolder = filter:FindFirstChild("BredMakurz")
+        end
+    end
+    if not bredFolder then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "BredMakurz" and obj:IsA("Folder") then
+                bredFolder = obj
+                break
+            end
+        end
+    end
+    if bredFolder then
+        for _, obj in ipairs(bredFolder:GetChildren()) do
+            local values = obj:FindFirstChild("Values")
+            if values then
+                local broken = values:FindFirstChild("Broken")
+                if broken then
+                    BrokenStatusMap[obj] = broken.Value
+                    broken:GetPropertyChangedSignal("Value"):Connect(function()
+                        if Settings.Enabled then
+                            BrokenStatusMap[obj] = broken.Value
+                            UpdateTargetsList()
+                            AnalyzeTargetsCount()
+                            Log("Target status changed: " .. obj.Name .. " Now " .. tostring(broken.Value))
+                        end
+                    end)
+                end
+            end
+        end
+        Log("Goal analysis completed, tracked " .. #BrokenStatusMap .. " objects")
+    end
+end
+SetupBrokenTracking()
+
+AutoClaimAllowanceCoolDown = AutoClaimAllowanceCoolDown or false
+ATMUsage = ATMUsage or {}
+FarmPriority = FarmPriority or {}
+
+FarmPriority.AllowanceActive = FarmPriority.AllowanceActive or false
+FarmPriority.AllowanceEnabled = FarmPriority.AllowanceEnabled ~= false
+
+FarmPriority.DepositActive = FarmPriority.DepositActive or false
+FarmPriority.DepositEnabled = FarmPriority.DepositEnabled ~= false
+
+Settings.DepositThreshold = Settings.DepositThreshold or 5000
+
+local function WaitForCharacter()
+    while not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") do
+        task.wait(0.1)
+    end
+
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    return character, hrp
+end
+
+local function FindATMPartInside(instance)
+    if not instance then
+        return nil
+    end
+
+    if instance:IsA("BasePart") and instance.Name == "MainPart" then
+        return instance
+    end
+
+    if instance:IsA("Model") then
+        local directMainPart = instance:FindFirstChild("MainPart")
+        if directMainPart and directMainPart:IsA("BasePart") then
+            return directMainPart
+        end
+
+        if instance.PrimaryPart and instance.PrimaryPart:IsA("BasePart") then
+            return instance.PrimaryPart
+        end
+    end
+
+    for _, descendant in ipairs(instance:GetDescendants()) do
+        if descendant:IsA("BasePart") and descendant.Name == "MainPart" then
+            return descendant
+        end
+    end
+
+    if instance:IsA("Model") then
+        for _, descendant in ipairs(instance:GetDescendants()) do
+            if descendant:IsA("Model") and descendant.PrimaryPart and descendant.PrimaryPart:IsA("BasePart") then
+                return descendant.PrimaryPart
+            end
+        end
+    end
+
+    return nil
+end
+
+local function GetATM()
+    local _, hrp = WaitForCharacter()
+    if not hrp then
+        Log("GetATM: no HRP")
+        return nil, math.huge
+    end
+
+    local map = Workspace:FindFirstChild("Map")
+    if not map then
+        Log("GetATM: Map missing")
+        return nil, math.huge
+    end
+
+    local atmFolder = map:FindFirstChild("ATMz")
+    if not atmFolder then
+        Log("GetATM: ATMz folder missing")
+        return nil, math.huge
+    end
+
+    local closestATM = nil
+    local minDistance = math.huge
+
+    for _, child in ipairs(atmFolder:GetChildren()) do
+        local mainPart = FindATMPartInside(child)
+
+        if mainPart and mainPart:IsA("BasePart") then
+            local usageCount = ATMUsage[mainPart] or 0
+            if usageCount < 999 then
+                local atmDistance = (hrp.Position - mainPart.Position).Magnitude
+                if atmDistance < minDistance then
+                    minDistance = atmDistance
+                    closestATM = mainPart
+                end
+            end
+        end
+    end
+
+    if closestATM then
+        Log("GetATM: selected " .. closestATM:GetFullName())
+    else
+        Log("GetATM: no valid ATM found")
+    end
+
+    return closestATM, minDistance
+end
+
+local function Drop10Cash()
+    local ok = pcall(function()
+        ReplicatedStorage.Events.DCZSH:InvokeServer(10)
+    end)
+
+    if ok then
+        Log("Dropped 10 cash")
+    else
+        Log("Failed to drop 10 cash")
+    end
+
+    task.wait(0.35)
+    return ok
+end
+
+local function ClaimAllowanceAtATM(targetATM)
+    local ok = pcall(function()
+        ReplicatedStorage.Events.CLMZALOW:InvokeServer(targetATM)
+    end)
+
+    if ok then
+        Log("Allowance claimed")
+    else
+        Log("Failed to claim allowance")
+    end
+
+    task.wait(4)
+    return ok
+end
+
+local function DepositCashAtATM(targetATM, amount)
+    local ok = pcall(function()
+        ReplicatedStorage.Events.ATM:InvokeServer("DP", amount, targetATM)
+    end)
+
+    if ok then
+        Log("Deposited cash: " .. tostring(amount))
+    else
+        Log("Failed to deposit cash: " .. tostring(amount))
+    end
+
+    -- important for TP mode and server lag
+    task.wait(4)
+    return ok
+end
+
+local function RefreshCashAfterDrop(cashData, oldCash)
+    if oldCash >= 10 then
+        Drop10Cash()
+
+        -- IMPORTANT:
+        -- wait so the bugged cash value refreshes after dropping 10
+        task.wait(4)
+
+        local refreshedCashValue = cashData:FindFirstChild("Cash")
+        local refreshedCash = refreshedCashValue and refreshedCashValue.Value or 0
+        return refreshedCash
+    end
+
+    return oldCash
+end
+
+local function ProcessAllowanceIfReady()
+    if not FarmPriority.AllowanceEnabled then
+        return
+    end
+
+    local _, hrp = WaitForCharacter()
+    if not hrp then
+        return
+    end
+
+    local playerDataFolder = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+    if not playerDataFolder then
+        Log("Allowance: PlayerbaseData2 missing")
+        return
+    end
+
+    local cashData = playerDataFolder:FindFirstChild(LocalPlayer.Name)
+    if not cashData then
+        Log("Allowance: cashData missing")
+        return
+    end
+
+    local nextAllowance = cashData:FindFirstChild("NextAllowance")
+
+    if nextAllowance and nextAllowance.Value == 0 and not AutoClaimAllowanceCoolDown then
+        FarmPriority.AllowanceActive = true
+        AutoClaimAllowanceCoolDown = true
+
+        Log("Allowance ready, starting ATM logic")
+
+        local targetATM = GetATM()
+        if not targetATM then
+            Log("Allowance ready but no ATM found")
+            AutoClaimAllowanceCoolDown = false
+            FarmPriority.AllowanceActive = false
+            return
+        end
+
+        Log("Using ATM: " .. targetATM:GetFullName())
+
+        local movedToATM = GoToTarget(targetATM)
+        if not movedToATM then
+            Log("Failed to reach ATM")
+            AutoClaimAllowanceCoolDown = false
+            FarmPriority.AllowanceActive = false
+            return
+        end
+
+        task.wait(0.4)
+
+        local claimed = ClaimAllowanceAtATM(targetATM)
+
+        if claimed then
+            Log("Allowance claim succeeded")
+        else
+            Log("Allowance claim failed")
+        end
+
+        task.wait(0.5)
+
+        local startTime = tick()
+        local maxDepositTime = 20
+        local stillDepositing = true
+
+        while stillDepositing and (tick() - startTime) < maxDepositTime do
+            if not Settings.Enabled then
+                break
+            end
+
+            local aliveCharacter = LocalPlayer.Character
+            local aliveHumanoid = aliveCharacter and aliveCharacter:FindFirstChildOfClass("Humanoid")
+            if not aliveHumanoid or aliveHumanoid.Health <= 0 then
+                break
+            end
+
+            local cashValue = cashData:FindFirstChild("Cash")
+            local cash = cashValue and cashValue.Value or 0
+
+            if cash < 10 then
+                Log("Cash is already below 10, ATM finished")
+                stillDepositing = false
+                break
+            end
+
+            cash = RefreshCashAfterDrop(cashData, cash)
+
+            if cash < 10 then
+                Log("Cash refreshed below 10 after drop, ATM finished")
+                stillDepositing = false
+                break
+            end
+
+            DepositCashAtATM(targetATM, cash)
+
+            local newCashValue = cashData:FindFirstChild("Cash")
+            local newCash = newCashValue and newCashValue.Value or 0
+
+            if newCash < 10 then
+                Log("Allowance deposit successful, cash is now below 10")
+                stillDepositing = false
+                break
+            end
+
+            if newCash >= cash then
+                Log("Cash did not decrease, stopping ATM loop")
+                stillDepositing = false
+                break
+            end
+        end
+
+        ATMUsage[targetATM] = (ATMUsage[targetATM] or 0) + 1
+        AutoClaimAllowanceCoolDown = false
+        FarmPriority.AllowanceActive = false
+
+        Log("Allowance logic finished, returning to safe farm")
+    end
+end
+
+local function ProcessDepositIfNeeded()
+    if not FarmPriority.DepositEnabled then
+        return false
+    end
+
+    if FarmPriority.AllowanceActive then
+        return false
+    end
+
+    if AutoClaimAllowanceCoolDown then
+        return false
+    end
+
+    local _, hrp = WaitForCharacter()
+    if not hrp then
+        return false
+    end
+
+    local playerDataFolder = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+    if not playerDataFolder then
+        Log("Deposit: PlayerbaseData2 missing")
+        return false
+    end
+
+    local cashData = playerDataFolder:FindFirstChild(LocalPlayer.Name)
+    if not cashData then
+        Log("Deposit: cashData missing")
+        return false
+    end
+
+    local cashValue = cashData:FindFirstChild("Cash")
+    local cash = cashValue and cashValue.Value or 0
+
+    if cash < Settings.DepositThreshold then
+        return false
+    end
+
+    Log("Deposit threshold reached (" .. tostring(cash) .. "), starting ATM deposit")
+    FarmPriority.DepositActive = true
+
+    local targetATM = GetATM()
+    if not targetATM then
+        Log("Deposit: no ATM found")
+        FarmPriority.DepositActive = false
+        return false
+    end
+
+    local movedToATM = GoToTarget(targetATM)
+    if not movedToATM then
+        Log("Deposit: failed to reach ATM")
+        FarmPriority.DepositActive = false
+        return false
+    end
+
+    task.wait(0.4)
+
+    local startTime = tick()
+    local maxDepositTime = 20
+    local depositSuccess = false
+
+    while (tick() - startTime) < maxDepositTime do
+        if not Settings.Enabled then
+            break
+        end
+
+        local aliveCharacter = LocalPlayer.Character
+        local aliveHumanoid = aliveCharacter and aliveCharacter:FindFirstChildOfClass("Humanoid")
+        if not aliveHumanoid or aliveHumanoid.Health <= 0 then
+            break
+        end
+
+        local currentCashValue = cashData:FindFirstChild("Cash")
+        local currentCash = currentCashValue and currentCashValue.Value or 0
+
+        if currentCash < 10 then
+            depositSuccess = true
+            Log("Deposit successful, cash is now below 10")
+            break
+        end
+
+        currentCash = RefreshCashAfterDrop(cashData, currentCash)
+
+        if currentCash < 10 then
+            depositSuccess = true
+            Log("Deposit successful after refresh, cash is now below 10")
+            break
+        end
+
+        DepositCashAtATM(targetATM, currentCash)
+
+        local afterCashValue = cashData:FindFirstChild("Cash")
+        local afterCash = afterCashValue and afterCashValue.Value or 0
+
+        if afterCash < 10 then
+            depositSuccess = true
+            Log("Deposit successful, cash is now below 10")
+            break
+        end
+
+        if afterCash >= currentCash then
+            Log("Deposit did not reduce cash, stopping deposit loop")
+            break
+        end
+    end
+
+    FarmPriority.DepositActive = false
+
+    if depositSuccess then
+        Log("Deposit process finished successfully")
+    else
+        Log("Deposit process ended without full success")
+    end
+
+    return depositSuccess
+end
+
+--// MAIN LOOP
+local function MainFarmLoop()
+    Log("Autofarm loop started")
+    RiseToTargetY()
+
+    while true do
+        task.wait(0.15)
+
+        if not Settings.Enabled then
+            task.wait(1)
+            continue
+        end
+
+        Log("=== Farm cycle ===")
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        Settings.IsDead = (not humanoid) or (humanoid.Health <= 0)
+
+        if Settings.IsDead then
+            Log("Character dead, waiting")
+            task.wait(3)
+            continue
+        end
+
+        -- allowance / ATM first
+        ProcessAllowanceIfReady()
+
+        if FarmPriority.AllowanceActive then
+            task.wait(0.3)
+            continue
+        end
+
+        local didDeposit = ProcessDepositIfNeeded()
+
+        if FarmPriority.DepositActive then
+            task.wait(0.3)
+            continue
+        end
+
+        if didDeposit then
+            task.wait(0.3)
+            continue
+        end
+
+        RiseToTargetY()
+
+        if not HasTool("Crowbar") then
+            Log("No crowbar, trying to buy")
+            local bought = BuyCrowbar()
+            if not bought then
+                Log("Failed to purchase crowbar, waiting")
+                task.wait(0.5)
+                continue
+            end
+        else
+            Log("Crowbar already owned")
+        end
+
+        local available, total = UpdateTargetsList()
+        TotalAvailableTargets = available
+
+        if available < 5 then
+            Log("Few targets left (" .. available .. "), I recommend changing server")
+        end
+
+        if available == 0 then
+            Log("No targets available, waiting")
+            task.wait(0.5)
+            continue
+        end
+
+        local nextTarget = nil
+        local minDist = math.huge
+        local currentHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+        if not currentHRP then
+            task.wait(0.5)
+            continue
+        end
+
+        for _, targetInfo in ipairs(SortedTargets) do
+            if not Settings.TempIgnored[targetInfo.obj] then
+                local dist = (targetInfo.pos - currentHRP.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nextTarget = targetInfo.obj
+                end
+            end
+        end
+
+        if not nextTarget then
+            Log("No valid target found, waiting")
+            task.wait(0.5)
+            continue
+        end
+
+        local mainPart = nextTarget:FindFirstChild("MainPart") or nextTarget.PrimaryPart
+        if not mainPart then
+            Log("Target has no MainPart, skipping")
+            Settings.ProcessedList[nextTarget] = true
+            continue
+        end
+
+        Log("Moving to target: " .. nextTarget.Name .. ", distance " .. math.floor((mainPart.Position - currentHRP.Position).Magnitude))
+
+        local moveSuccess = GoToTarget(mainPart)
+
+        if moveSuccess then
+            if not EnsureCrowbarEquipped() then
+                Log("Could not equip crowbar, skipping target")
+                Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+                table.insert(Settings.IgnoredList, nextTarget)
+                task.wait(0.5)
+                continue
+            end
+
+            Log("Opening safe")
+            local hackSuccess = HackSafe(nextTarget)
+
+            if hackSuccess then
+                ResetPathFails()
+                Log("Safe opened, waiting for money...")
+
+                task.wait(3)
+
+                local startTime = tick()
+                local maxCollectTime = 20
+                local stillMoney = true
+
+                while stillMoney and (tick() - startTime) < maxCollectTime do
+                    local playerDataFolder2 = ReplicatedStorage:FindFirstChild("PlayerbaseData2")
+                    local cashData2 = playerDataFolder2 and playerDataFolder2:FindFirstChild(LocalPlayer.Name)
+                    local nextAllowance2 = cashData2 and cashData2:FindFirstChild("NextAllowance")
+                    local cashValue2 = cashData2 and cashData2:FindFirstChild("Cash")
+                    local currentCash2 = cashValue2 and cashValue2.Value or 0
+
+                    if nextAllowance2 and nextAllowance2.Value == 0 and not AutoClaimAllowanceCoolDown then
+                        Log("Allowance became ready, pausing safe cycle")
+                        break
+                    end
+
+                    if FarmPriority.DepositEnabled and currentCash2 >= (Settings.DepositThreshold or 5000) then
+                        Log("Deposit threshold reached during safe cycle, pausing")
+                        break
+                    end
+
+                    stillMoney = CollectMoneyNearTarget(nextTarget)
+                    task.wait(1)
+                end
+
+                Settings.ProcessedList[nextTarget] = true
+                Log("Safe fully processed")
+            else
+                Log("Failed to open safe, temporarily ignoring")
+                Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+                table.insert(Settings.IgnoredList, nextTarget)
+            end
+        else
+            -- do not increment here; MoveToTarget already counted the fail
+            Log("Failed to reach target, temporarily ignoring")
+            Settings.TempIgnored[nextTarget] = tick() + Settings.IgnoreDuration
+            table.insert(Settings.IgnoredList, nextTarget)
+
+            if Settings.IsDead then
+                task.wait(2)
+                continue
+            end
+        end
+
+        task.wait(0.6)
+    end
+end
+
+-- ====================== ADMIN CHECK SELECTOR ======================
+local AdminCheck_Enabled = false
+local AdminCheck_Mode = "Kick"  -- "Kick" or "Notify"
+
+local staffPlayers = {
+    groups = {
+        [4165692] = { ["Tester"]=true, ["Contributor"]=true, ["Tester+"]=true, ["Developer"]=true, ["Developer+"]=true, ["Community Manager"]=true, ["Manager"]=true, ["Owner"]=true },
+        [32406137] = { ["Junior"]=true, ["Moderator"]=true, ["Senior"]=true, ["Administrator"]=true, ["Manager"]=true, ["Holder"]=true },
+        [8024440] = { ["zzzz"]=true, ["reshape enjoyer"]=true, ["i heart reshape"]=true, ["reshape superfan"]=true },
+        [14927228] = { ["♞"]=true }
+    },
+    users = {3294804378,93676120,54087314,81275825,140837601,1229486091,46567801,418086275,29706395,3717066084,1424338327,5046662686,5046661126,5046659439,418199326,1024216621,1810535041,63238912,111250044,63315426,730176906,141193516,194512073,193945439,412741116,195538733,102045519,955294,957835150,25689921,366613818,281593651,455275714,208929505,96783330,156152502,93281166,959606619,142821118,632886139,175931803,122209625,278097946,142989311,1517131734,446849296,87189764,67180844,9212846,47352513,48058122,155413858,10497435,513615792,55893752,55476024,151691292,136584758,16983447,3111449,94693025,271400893,5005262660,295331237,64489098,244844600,114332275,25048901,69262878,50801509,92504899,42066711,50585425,31365111,166406495,2457253857,29761878,21831137,948293345,439942262,38578487,1163048,7713309208,3659305297,15598614,34616594,626833004,198610386,153835477,3923114296,3937697838,102146039,119861460,371665775,1206543842,93428604,1863173316,90814576,374665997,423005063,140172831,42662179,9066859,438805620,14855669,727189337,1871290386,608073286}
+}
+
+local function hasTracker(player)
+    if not player or not player:IsA("Player") then return false, nil end
+    for _, child in ipairs(player:GetChildren()) do
+        if typeof(child.Name) == "string" and child.Name:sub(-8) == "Tracker$" then
+            local tracked = child.Name:sub(1, -9)
+            if Players:FindFirstChild(tracked) then
+                return true, tracked
+            end
+        end
+    end
+    return false, nil
+end
+
+local function isStaff(player)
+    if not player or not player:IsA("Player") then return false end
+
+    for groupID, roles in pairs(staffPlayers.groups) do
+        local successRank, rank = pcall(function() return player:GetRankInGroup(groupID) end)
+        if successRank and rank and rank > 0 then
+            local successRole, roleName = pcall(function() return player:GetRoleInGroup(groupID) end)
+            if successRole and roleName and roles[roleName] then
+                return true, roleName, groupID
+            end
+        end
+    end
+
+    for _, uid in ipairs(staffPlayers.users) do
+        if player.UserId == uid then
+            return true, "UserID", player.UserId
+        end
+    end
+    return false
+end
+
+local function kickformat(staffInfo)
+    if not staffInfo or not staffInfo.Staff then return "Staff detected." end
+    local msg = "Staff detected:\n"
+    for i, s in ipairs(staffInfo.Staff) do
+        local idType = "Role"
+        local idValue = s.Role or "Unknown"
+        if s.Role == "UserID" then idType = "UserID" idValue = s.GroupId or "Unknown" end
+        if s.Role == "Tracker User" then idType = "Tracker" idValue = "Active" end
+        msg = msg .. string.format("- %s (%s: %s)%s", s.Name or "Unknown", idType, idValue, s.TrackedPlayer and " - Tracking: " .. s.TrackedPlayer or "")
+        if i < #staffInfo.Staff then msg = msg .. "\n" end
+    end
+    return msg
+end
+
+local function handleStaffDetection(staffInfo)
+    local msg = kickformat(staffInfo)
+    if AdminCheck_Mode == "Kick" then
+        LocalPlayer:Kick("Staff joined\n\n" .. msg)
+    else
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "STAFF DETECTED",
+            Text = msg,
+            Duration = 10,
+            Icon = "rbxassetid://81885173550986"
+        })
+        Log("Staff detected - Notification sent")
+    end
+end
+
+local function checkCurrentStaff()
+    local staffFound = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local isStaffMember, role, groupID = isStaff(player)
+            local hasTrack, tracked = hasTracker(player)
+            if isStaffMember or hasTrack then
+                table.insert(staffFound, {
+                    Name = player.Name,
+                    Role = hasTrack and "Tracker User" or role,
+                    GroupId = groupID,
+                    TrackedPlayer = tracked
+                })
+            end
+        end
+    end
+    if #staffFound > 0 then
+        handleStaffDetection({Staff = staffFound})
+        return true
+    end
+    return false
+end
+
+local function onPlayerJoining(player)
+    if not AdminCheck_Enabled then return end
+    local isStaffMember, role, groupID = isStaff(player)
+    local hasTrack, tracked = hasTracker(player)
+    if isStaffMember or hasTrack then
+        local staffInfo = { Staff = {{ Name = player.Name, Role = hasTrack and "Tracker User" or role, GroupId = groupID, TrackedPlayer = tracked }} }
+        handleStaffDetection(staffInfo)
+    end
+end
+
+local function AdminCheck_Enable()
+    if AdminCheck_Enabled then return end
+    AdminCheck_Enabled = true
+    print("Admin Check Enabled - Mode: " .. AdminCheck_Mode)
+
+    if AdminCheck_Connection then AdminCheck_Connection:Disconnect() end
+    AdminCheck_Connection = Players.PlayerAdded:Connect(onPlayerJoining)
+
+    task.spawn(checkCurrentStaff)
+end
+
+local function AdminCheck_Disable()
+    if not AdminCheck_Enabled then return end
+    AdminCheck_Enabled = false
+    if AdminCheck_Connection then
+        AdminCheck_Connection:Disconnect()
+        AdminCheck_Connection = nil
+    end
+    print("Admin Check Disabled")
+end
+
+local NoFallEnabled = false
+local NoFallConnection = nil
+local RespawnConnection = nil
+local OriginalFallDamageFunction = nil
+
+local function ApplyNoFall()
+    local runService = game:GetService("RunService")
+
+    if NoFallConnection then
+        NoFallConnection:Disconnect()
+    end
+
+    NoFallConnection = runService.RenderStepped:Connect(function()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+        if humanoid and humanoid.Health > 0 then
+            pcall(function()
+                humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+                humanoid:ChangeState(Enum.HumanoidStateType.Running)
+            end)
+        end
+    end)
+end
+
+local function PatchFallModule()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local fallDamageModule = replicatedStorage:FindFirstChild("FallDamageModule")
+
+    if fallDamageModule then
+        local success, fallDamage = pcall(function()
+            return require(fallDamageModule)
+        end)
+
+        if success and type(fallDamage) == "table" and type(fallDamage.FallDamage) == "function" then
+            if not OriginalFallDamageFunction then
+                OriginalFallDamageFunction = fallDamage.FallDamage
+            end
+
+            fallDamage.FallDamage = function(...)
+                return 0
+            end
+
+            Log("No fall damage module patched")
+        end
+    end
+end
+
+local function EnableNoFallDamage()
+    if NoFallEnabled then return end
+    NoFallEnabled = true
+
+    PatchFallModule()
+    ApplyNoFall()
+
+    -- 🔥 THIS IS THE IMPORTANT PART (RESPAWN SUPPORT)
+    if RespawnConnection then
+        RespawnConnection:Disconnect()
+    end
+
+    RespawnConnection = LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(1) -- wait for character to fully load
+
+        if NoFallEnabled then
+            PatchFallModule()
+            ApplyNoFall()
+            Log("No fall reapplied after respawn")
+        end
+    end)
+
+    Log("No fall damage ENABLED")
+end
+
+local function DisableNoFallDamage()
+    NoFallEnabled = false
+
+    if NoFallConnection then
+        NoFallConnection:Disconnect()
+        NoFallConnection = nil
+    end
+
+    if RespawnConnection then
+        RespawnConnection:Disconnect()
+        RespawnConnection = nil
+    end
+
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local fallDamageModule = replicatedStorage:FindFirstChild("FallDamageModule")
+
+    if fallDamageModule and OriginalFallDamageFunction then
+        local success, fallDamage = pcall(function()
+            return require(fallDamageModule)
+        end)
+
+        if success and type(fallDamage) == "table" then
+            fallDamage.FallDamage = OriginalFallDamageFunction
+        end
+    end
+
+    Log("No fall damage DISABLED")
+end
+
+-- Auto Lockpick Safes
+
+
+-- Auto Lockpick Safes (FULL FIX + FAST + AUTO EQUIP)
+-- Changes:
+-- 1) Faster cadence: COOLDOWN = 0.1
+-- 2) Auto-equips a Lockpick from Backpack when none is equipped
+-- 3) Clears stale tool refs when a lockpick breaks/deletes
+-- 4) Detects newly equipped lockpick instance and waits briefly for it to settle
+
+--// SERVICES
+local Players = game:GetService("Players")
+
+--// PLAYER
+local player = Players.LocalPlayer
+
+--// MAP
+local folder = workspace:WaitForChild("Map"):WaitForChild("BredMakurz")
+
+--// SETTINGS
+local ManualFarmEnabled = false
+local ManualFarmBusy = false
+local lastRun = 0
+local COOLDOWN = 0.1
+local RANGE = 10
+
+--// STATE
+local CurrentTool = nil
+local CurrentRemote = nil
+local LastToolId = nil
+local LastEquipTime = 0
+
+--// FUNCTIONS
+local function getCharacter()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local function getBackpack()
+	return player:WaitForChild("Backpack")
+end
+
+local function getHumanoid()
+	local char = getCharacter()
+	return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getHRP()
+	local char = getCharacter()
+	return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getPosition(obj)
+	if obj:IsA("Model") then
+		return obj:GetPivot().Position
+	elseif obj:IsA("BasePart") then
+		return obj.Position
+	end
+end
+
+local function getClosestSafe()
+	local hrp = getHRP()
+	if not hrp then
+		return nil
+	end
+
+	local closest, dist = nil, math.huge
+
+	for _, safe in ipairs(folder:GetChildren()) do
+		if safe.Name:find("Safe") then
+			local pos = getPosition(safe)
+			if pos then
+				local d = (pos - hrp.Position).Magnitude
+				if d < dist then
+					dist = d
+					closest = safe
+				end
+			end
+		end
+	end
+
+	return closest
+end
+
+local function clearToolState()
+	CurrentTool = nil
+	CurrentRemote = nil
+	LastToolId = nil
+	LastEquipTime = 0
+end
+
+local function equipLockpickFromBackpack()
+	local char = getCharacter()
+	local humanoid = getHumanoid()
+	local backpack = getBackpack()
+
+	if not char or not humanoid or not backpack then
+		return nil
+	end
+
+	local equipped = char:FindFirstChild("Lockpick")
+	if equipped and equipped:IsA("Tool") then
+		return equipped
+	end
+
+	local stored = backpack:FindFirstChild("Lockpick")
+	if not stored or not stored:IsA("Tool") then
+		return nil
+	end
+
+	pcall(function()
+		humanoid:EquipTool(stored)
+	end)
+
+	task.wait(0.1)
+
+	local newEquipped = char:FindFirstChild("Lockpick")
+	if newEquipped and newEquipped:IsA("Tool") then
+		return newEquipped
+	end
+
+	return nil
+end
+
+local function refreshEquippedLockpick()
+	local char = getCharacter()
+
+	-- if old cached tool got destroyed / removed, clear it
+	if CurrentTool and CurrentTool.Parent == nil then
+		clearToolState()
+	end
+
+	-- ONLY use equipped lockpick, but auto-equip one from backpack if needed
+	local tool = char:FindFirstChild("Lockpick")
+	if not tool or not tool:IsA("Tool") then
+		tool = equipLockpickFromBackpack()
+	end
+
+	if not tool or not tool:IsA("Tool") then
+		clearToolState()
+		return nil, nil
+	end
+
+	local debugId = nil
+	local ok = pcall(function()
+		debugId = tool:GetDebugId()
+	end)
+
+	if not ok or not debugId then
+		clearToolState()
+		return nil, nil
+	end
+
+	-- detect brand new equipped lockpick instance
+	if debugId ~= LastToolId then
+		CurrentTool = tool
+		CurrentRemote = tool:FindFirstChild("Remote")
+		LastToolId = debugId
+		LastEquipTime = tick()
+		print("New lockpick equipped:", debugId)
+	else
+		-- keep refreshing remote in case children changed
+		CurrentTool = tool
+		CurrentRemote = tool:FindFirstChild("Remote")
+	end
+
+	if not CurrentRemote then
+		return nil, CurrentTool
+	end
+
+	return CurrentRemote, CurrentTool
+end
+
+local function RunManualFarm()
+	if ManualFarmBusy then
+		return
+	end
+	ManualFarmBusy = true
+
+	local ok, err = pcall(function()
+		local remote, tool = refreshEquippedLockpick()
+
+		if not remote or not tool then
+			print("No lockpick available")
+			return
+		end
+
+		-- wait a little after equip so server fully accepts new tool
+		if (tick() - LastEquipTime) < 0.1 then
+			return
+		end
+
+		-- if the tool disappeared between checks, stop immediately
+		if tool.Parent == nil then
+			clearToolState()
+			return
+		end
+
+		local safe = getClosestSafe()
+		if not safe then
+			return
+		end
+
+		local pos = getPosition(safe)
+		local hrp = getHRP()
+		if not pos or not hrp then
+			return
+		end
+
+		local dist = (pos - hrp.Position).Magnitude
+		if dist > RANGE then
+			return
+		end
+
+		print("Closest safe:", safe.Name)
+
+		local sValue = remote:InvokeServer("S", safe, "s")
+		print("S:", sValue)
+
+		if not sValue then
+			return
+		end
+
+		local dValue = remote:InvokeServer("D", safe, "s", sValue)
+		local cValue = remote:InvokeServer("C")
+
+		print("Done:", dValue, cValue)
+
+		task.wait(0.05)
+
+		-- if the lockpick got destroyed after use, forget it immediately
+		if tool.Parent == nil then
+			print("Lockpick broke and was deleted.")
+			clearToolState()
+			return
+		end
+
+		-- if equipped tool changed, refresh state
+		local char = getCharacter()
+		local equippedNow = char:FindFirstChild("Lockpick")
+		if equippedNow ~= tool then
+			clearToolState()
+			return
+		end
+	end)
+
+	if not ok then
+		warn("ManualFarm error:", err)
+		clearToolState()
+	end
+
+	ManualFarmBusy = false
+end
+
+--// LOOP
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+
+		local ok, err = pcall(function()
+			if not ManualFarmEnabled then
+				return
+			end
+
+			if ManualFarmBusy then
+				return
+			end
+
+			local safe = getClosestSafe()
+			if not safe then
+				return
+			end
+
+			local pos = getPosition(safe)
+			local hrp = getHRP()
+			if not pos or not hrp then
+				return
+			end
+
+			if (pos - hrp.Position).Magnitude > RANGE then
+				return
+			end
+
+			if (tick() - lastRun) >= COOLDOWN then
+				lastRun = tick()
+				RunManualFarm()
+			end
+		end)
+
+		if not ok then
+			warn("Loop crash:", err)
+			clearToolState()
+			ManualFarmBusy = false
+		end
+	end
+end)
+
+
+-- Auto buy lockpick 10 
+
+-- Auto Buy Lockpick (Radius + Fluent UI)
+-- Assumes you already have:
+-- Tabs.Farm
+-- Optional: Log(msg)
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+
+local Events = ReplicatedStorage:WaitForChild("Events")
+local byzers = Events:WaitForChild("BYZERSPROTEC")
+local shopRemote2 = Events:WaitForChild("SSHPRMTE2")
+local shopRemote1 = Events:WaitForChild("SSHPRMTE1")
+
+-- SETTINGS
+local AutoBuyLockpickEnabled = false
+local LockpickAmount = 9
+local LockpickBuyRadius = 8
+local AutoBuyLockpickBusy = false
+local AutoBuyCooldown = 1.5
+local LastAutoBuy = 0
+
+local function getCharacter()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local function getHRP()
+	local char = getCharacter()
+	return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getClosestShopInRadius()
+	local hrp = getHRP()
+	if not hrp then
+		return nil, nil, math.huge
+	end
+
+	local shopFolder = workspace:WaitForChild("Map"):WaitForChild("Shopz")
+
+	local closestShop = nil
+	local closestPart = nil
+	local closestDist = math.huge
+
+	for _, shop in ipairs(shopFolder:GetChildren()) do
+		local mainPart = shop:FindFirstChild("MainPart")
+		if mainPart and mainPart:IsA("BasePart") then
+			local dist = (mainPart.Position - hrp.Position).Magnitude
+			if dist <= LockpickBuyRadius and dist < closestDist then
+				closestDist = dist
+				closestShop = shop
+				closestPart = mainPart
+			end
+		end
+	end
+
+	return closestShop, closestPart, closestDist
+end
+
+local function runAutoBuyLockpick()
+	if AutoBuyLockpickBusy then
+		return
+	end
+
+	AutoBuyLockpickBusy = true
+
+	local ok, err = pcall(function()
+		local shopModel, shopPart, dist = getClosestShopInRadius()
+
+		if not shopModel or not shopPart then
+			warn("No shop found within radius " .. tostring(LockpickBuyRadius))
+			return
+		end
+
+		print("Using shop:", shopModel.Name, "| Distance:", math.floor(dist))
+
+		-- OPEN SHOP
+		print("Opening shop...")
+		byzers:FireServer(true, "shop", shopPart, "IllegalStore")
+		task.wait(0.5)
+
+		shopRemote2:FireServer("UpdateSlots")
+		task.wait(0.5)
+
+		-- BUY LOOP
+		for i = 1, LockpickAmount do
+			print("Buying lockpick", i)
+
+			local result = shopRemote1:InvokeServer(
+				"IllegalStore",
+				"Misc",
+				"Lockpick",
+				shopPart,
+				nil,
+				true,
+				nil
+			)
+
+			if result == false then
+				warn("Stopped buying (no money or blocked)")
+				break
+			end
+
+			task.wait(0.2)
+		end
+
+		-- CLOSE SHOP
+		print("Closing shop...")
+		byzers:FireServer(false, "shop", shopPart, "IllegalStore")
+	end)
+
+	if not ok then
+		warn("Auto buy error:", err)
+	end
+
+	AutoBuyLockpickBusy = false
+end
+
+-- LOOP
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+
+		if not AutoBuyLockpickEnabled then
+			continue
+		end
+
+		if AutoBuyLockpickBusy then
+			continue
+		end
+
+		if (tick() - LastAutoBuy) < AutoBuyCooldown then
+			continue
+		end
+
+		local shopModel = getClosestShopInRadius()
+		if shopModel then
+			LastAutoBuy = tick()
+			runAutoBuyLockpick()
+		end
+	end
+end)
+
+------------------------------------------------
+-- C4 VARIABLES
+------------------------------------------------
+
+local c4Enabled = false
+local c4Speed = 200
+
+local Forward = 0
+local Sideways = 0
+local Break = false
+
+local plrs = game:GetService("Players")
+local me = plrs.LocalPlayer
+local tween = game:GetService("TweenService")
+local input = game:GetService("UserInputService")
+local run = game:GetService("RunService")
+local camera = workspace.CurrentCamera
+
+local Debris = workspace:WaitForChild("Debris")
+local VParts = Debris:WaitForChild("VParts")
+
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "SevHubV3",
+    SubTitle = "Premium Automation Farm",
+    TabWidth = 145,
+    Size = UDim2.fromOffset(560, 430),
+    Acrylic = true,
+    Theme = "Amethyst",
+    MinimizeKey = Enum.KeyCode.RightControl
+})
+
+local Tabs = {
+    Farm = Window:AddTab({ Title = "Farm", Icon = "leaf" }),
+    Visuals = Window:AddTab({ Title = "Visuals", Icon = "eye" }),
+    Utility = Window:AddTab({ Title = "Utility", Icon = "wrench" }),
+    Safety = Window:AddTab({ Title = "Safety", Icon = "shield" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+
+-- FARM
+Tabs.Farm:AddSection("Core Farm")
+
+Tabs.Farm:AddToggle("AutoFarmToggle", {
+    Title = "Auto Farm",
+    Description = "Main pathfinding safe/register farm",
+    Default = false,
+    Callback = function(value)
+        Settings.Enabled = value
+        if value then
+            Settings.IgnoredList = {}
+            Settings.ProcessedList = {}
+            Settings.TempIgnored = {}
+            UpdateTargetsList()
+            AnalyzeTargetsCount()
+            RiseToTargetY()
+            Log("Autofarm ENABLED")
+            Fluent:Notify({ Title = "AutoFarm", Content = "Started", Duration = 2 })
+        else
+            ClearPathVisuals()
+            SomeFlag2 = false
+            StatusText = "Waiting"
+            Log("Autofarm DISABLED")
+            Fluent:Notify({ Title = "AutoFarm", Content = "Stopped", Duration = 2 })
+        end
+    end
+})
+
+Tabs.Farm:AddDropdown("MoveMethodDropdown", {
+    Title = "Move Method",
+    Description = "Choose Farming Method",
+    Values = { "Pathfinding", "Method 2" },
+    Default = "Pathfinding",
+    Callback = function(Value)
+        Settings.FarmMethod = Value
+        Log("Move method set to " .. tostring(Value))
+    end
+})
+
+Tabs.Farm:AddParagraph({
+	Title = "READ ME BEFORE RISKING YOUR ACCOUNT!!!",
+	Content = "YOUR EXECUTOR MUST HAVE RAKENT LIBRARY BECAUSE NORMAL INVIS DOESNT WORK WITH METHOD 2"
+})
+
+Tabs.Farm:AddToggle("AutoMoneyToggle", {
+    Title = "Auto Money",
+    Description = "Auto pickup nearby cash",
+    Default = false,
+    Callback = function(value)
+        if value then
+            StartAutoPickup()
+            Log("Auto money pickup ENABLED")
+        else
+            StopAutoPickup()
+            Log("Auto money pickup DISABLED")
+        end
+    end
+})
+
+Tabs.Farm:AddToggle("AllowanceToggle", {
+    Title = "Auto Allowance",
+    Description = "Claim allowance and deposit cash at ATM",
+    Default = false,
+    Callback = function(Value)
+        FarmPriority = FarmPriority or {}
+        FarmPriority.AllowanceEnabled = Value
+        Log("Auto Allowance " .. (Value and "ENABLED" or "DISABLED"))
+    end
+})
+
+Tabs.Farm:AddToggle("AutoDepositToggle", {
+    Title = "Auto Deposit",
+    Description = "Deposit cash even when allowance is not ready",
+    Default = false,
+    Callback = function(Value)
+        FarmPriority.DepositEnabled = Value
+        Log("Auto Deposit " .. (Value and "ENABLED" or "DISABLED"))
+    end
+})
+
+Tabs.Farm:AddSlider("DepositThresholdSlider", {
+    Title = "Deposit Threshold",
+    Description = "Go to ATM when cash reaches this amount",
+    Default = 5000,
+    Min = 100,
+    Max = 50000,
+    Rounding = 0,
+    Callback = function(Value)
+        Settings.DepositThreshold = tonumber(Value) or 5000
+        Log("Deposit threshold set to " .. tostring(Settings.DepositThreshold))
+    end
+})
+
+Tabs.Farm:AddSlider("MoveSpeedSlider", {
+    Title = "Move Speed",
+    Description = "Path movement speed",
+    Default = 34.9,
+    Min = 10,
+    Max = 40,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.MoveSpeed = Value
+    end
+})
+
+Tabs.Farm:AddSlider("WaypointSpacingSlider", {
+    Title = "Waypoint Spacing",
+    Description = "Lower = smoother pathing",
+    Default = 3,
+    Min = 1,
+    Max = 8,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.WaypointSpacing = tonumber(Value) or 3
+    end
+})
+
+Tabs.Farm:AddSection("Path")
+
+Tabs.Farm:AddToggle("PathVisualsToggle", {
+    Title = "Path Visuals",
+    Description = "Show active path lines",
+    Default = true,
+    Callback = function(Value)
+        Settings.ShowPathVisuals = Value
+        if not Value then
+            ClearPathVisuals()
+        end
+        Log("Path visuals " .. (Value and "ENABLED" or "DISABLED"))
+    end
+})
+
+Tabs.Farm:AddSection("Targeting")
+
+Tabs.Farm:AddButton({
+    Title = "Refresh Target Analysis",
+    Description = "Re-scan safes and registers",
+    Callback = function()
+        local available, total = UpdateTargetsList()
+        TotalAvailableTargets = available
+        Log("Targets refreshed: " .. tostring(available) .. "/" .. tostring(total))
+    end
+})
+
+Tabs.Farm:AddButton({
+    Title = "Reset Ignored Targets",
+    Description = "Clear temp ignored list",
+    Callback = function()
+        Settings.TempIgnored = {}
+        Settings.IgnoredList = {}
+        Log("Ignored targets reset")
+    end
+})
+-- manualllllllly
+
+Tabs.Farm:AddSection("Manual Farming")
+
+Tabs.Farm:AddParagraph({
+	Title = "Lockpick Aura for legit farm, Bypassed lockpick buy limit",
+	Content = "Most undetected Safe for Main (You gotta be close for it work)"
+})
+
+local LockpickAmount = 5
+local AutoBuyLockpick = false
+
+Tabs.Farm:AddToggle("AutoBuyLockpickToggle", {
+	Title = "Auto Buy Lockpick",
+	Description = "Buys lockpicks when near a shop",
+	Default = false,
+	Callback = function(Value)
+		AutoBuyLockpickEnabled = Value
+	end
+})
+
+Tabs.Farm:AddSlider("LockpickAmountSlider", {
+	Title = "Lockpick Amount",
+	Description = "How many lockpicks to buy",
+	Default = 9,
+	Min = 1,
+	Max = 10,
+	Rounding = 0,
+	Callback = function(Value)
+		LockpickAmount = Value
+	end
+})
+
+
+Tabs.Farm:AddToggle("ManualFarmToggle", {
+	Title = "LockPick aura",
+	Description = "Runs lockpick sequence when near a safe",
+	Default = false,
+	Callback = function(Value)
+		ManualFarmEnabled = Value
+	end
+})
+
+-- VISUALS
+Tabs.Visuals:AddSection("ESP")
+
+Tabs.Visuals:AddToggle("SafeESPToggle", {
+    Title = "Safe / Register ESP",
+    Description = "SurfaceGui style",
+    Default = false,
+    Callback = function(v)
+        if v then EnableESP() else DisableESP() end
+    end
+})
+
+Tabs.Visuals:AddSlider("ESPScaler", {
+    Title = "ESP Size",
+    Description = "All-in-one scaler",
+    Default = 1.0,
+    Min = 0.6,
+    Max = 1.5,
+    Rounding = 2,
+    Callback = function(v)
+        EspScale = v
+        for _, data in pairs(EspElements) do
+            if data.title then data.title.TextSize = 16 * EspScale end
+            if data.distance then data.distance.TextSize = 12.5 * EspScale end
+            if data.status then data.status.TextSize = 13.5 * EspScale end
+        end
+    end
+})
+
+Tabs.Visuals:AddToggle("PlayerESP", {
+	Title = "Player ESP",
+	Default = ESPConfig.Disabled,
+	Callback = function(v)
+		ESPConfig.Enabled = v
+	end
+})
+
+Tabs.Visuals:AddSlider("ESPWidth", {
+	Title = "ESP Width",
+	Min = 160,
+	Max = 320,
+	Default = ESPConfig.BillboardWidth,
+	Rounding = 0,
+	Callback = function(v)
+		ESPConfig.BillboardWidth = v
+	end
+})
+
+Tabs.Visuals:AddSlider("ESPStudsOffset", {
+	Title = "ESP Height Offset",
+	Min = 2,
+	Max = 6,
+	Default = ESPConfig.StudsOffset,
+	Rounding = 1,
+	Callback = function(v)
+		ESPConfig.StudsOffset = v
+	end
+})
+
+Tabs.Visuals:AddSlider("ESPNameSize", {
+	Title = "Name Text Size",
+	Min = 10,
+	Max = 22,
+	Default = ESPConfig.NameSize,
+	Rounding = 0,
+	Callback = function(v)
+		ESPConfig.NameSize = v
+	end
+})
+
+Tabs.Visuals:AddSlider("ESPInfoSize", {
+	Title = "Info Text Size",
+	Min = 8,
+	Max = 18,
+	Default = ESPConfig.InfoSize,
+	Rounding = 0,
+	Callback = function(v)
+		ESPConfig.InfoSize = v
+	end
+})
+
+Tabs.Visuals:AddToggle("ESPDistance", {
+	Title = "Show Distance",
+	Default = ESPConfig.ShowDistance,
+	Callback = function(v)
+		ESPConfig.ShowDistance = v
+	end
+})
+
+Tabs.Visuals:AddColorpicker("ESPHealthyColor", {
+	Title = "Healthy Color",
+	Default = ESPConfig.HealthyColor,
+	Callback = function(v)
+		ESPConfig.HealthyColor = v
+	end
+})
+
+Tabs.Visuals:AddColorpicker("ESPLowColor", {
+	Title = "Low HP Color",
+	Default = ESPConfig.LowColor,
+	Callback = function(v)
+		ESPConfig.LowColor = v
+	end
+})
+
+Tabs.Visuals:AddColorpicker("ESPDeadColor", {
+	Title = "Dead Color",
+	Default = ESPConfig.DeadColor,
+	Callback = function(v)
+		ESPConfig.DeadColor = v
+	end
+})
+
+Tabs.Visuals:AddColorpicker("ESPBackgroundColor", {
+	Title = "Background Color",
+	Default = ESPConfig.BackgroundColor,
+	Callback = function(v)
+		ESPConfig.BackgroundColor = v
+	end
+})
+
+-- UTILITY
+Tabs.Utility:AddSection("Tools")
+
+Tabs.Utility:AddToggle("C4Toggle", {
+    Title = "Enable C4 Control",
+    Default = false,
+    Callback = function(v)
+        c4Enabled = v
+    end
+})
+
+Tabs.Utility:AddSlider("C4Speed", {
+    Title = "C4 Speed",
+    Min = 50,
+    Max = 500,
+    Default = 200,
+    Rounding = 0,
+    Callback = function(v)
+        c4Speed = v
+    end
+})
+
+Tabs.Utility:AddToggle("NoFallDamageToggle", {
+    Title = "No Fall Damage",
+    Description = "Prevents fall damage",
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            EnableNoFallDamage()
+        else
+            DisableNoFallDamage()
+        end
+    end
+})
+
+
+Tabs.Utility:AddButton({
+    Title = "Reanalyze Targets",
+    Description = "Run target counter again",
+    Callback = function()
+        AnalyzeTargetsCount()
+    end
+})
+
+Tabs.Utility:AddSection("Session")
+
+Tabs.Utility:AddParagraph({
+    Title = "SevHubV3",
+    Content = "Premium pathfinding hub for safes, registers, ESP, ATM allowance handling, and anti-stuck recovery."
+})
+
+-- SAFETY
+Tabs.Safety:AddSection("Protection")
+
+Tabs.Safety:AddToggle("AntiAfkToggle", {
+    Title = "Anti AFK",
+    Description = "Prevents idle disconnect",
+    Default = true,
+    Callback = function(Value)
+        AntiAfkEnabled = Value
+        if Value then
+            EnableAntiAfk()
+        else
+            DisableAntiAfk()
+        end
+        Log("Anti AFK " .. (Value and "ENABLED" or "DISABLED"))
+    end
+})
+
+-- Admin Check Selector
+Tabs.Safety:AddToggle("AdminCheckToggle", {
+    Title = "Staff Detector",
+    Default = false,
+    Callback = function(v)
+        if v then AdminCheck_Enable() else AdminCheck_Disable() end
+    end
+})
+
+Tabs.Safety:AddDropdown("AdminModeDropdown", {
+    Title = "Staff Action",
+    Values = {"Kick", "Notify"},
+    Default = "Kick",
+    Callback = function(v)
+        AdminCheck_Mode = v
+        Log("Admin mode set to " .. v)
+    end
+})
+
+Tabs.Safety:AddToggle("InvisibilityToggle", {
+    Title = "Invis (R6)",
+    Description = "",
+    Default = false,
+    Callback = function(value)
+        if value then
+            _G.Invis_Enable()
+            Log("Invisibility ENABLED")
+        else
+            _G.Invis_Disable()
+            Log("Invisibility DISABLED")
+        end
+    end
+})
+
+Tabs.Safety:AddButton({
+    Title = "Force Reset Character",
+    Description = "Emergency reset",
+    Callback = function()
+        if ResetCharacterBecauseStuck then
+            ResetCharacterBecauseStuck()
+        end
+    end
+})
+
+Tabs.Safety:AddParagraph({
+    Title = "Recovery",
+    Content = "Anti-stuck and respawn systems help recover from bad paths, impossible rooms, and broken movement states."
+})
+
+-- SETTINGS
+Tabs.Settings:AddSection("Interface")
+
+Tabs.Settings:AddDropdown("ThemeSelect", {
+    Title = "Theme",
+    Description = "UI color theme",
+    Values = { "Dark", "Darker", "Light", "Aqua", "Amethyst", "Rose" },
+    Default = "Amethyst",
+    Callback = function(Value)
+        Fluent:SetTheme(Value)
+    end
+})
+
+Tabs.Settings:AddToggle("DebugPrintToggle", {
+    Title = "Debug Prints",
+    Description = "Show Autofarm logs in console",
+    Default = false,
+    Callback = function(Value)
+        Settings.DebugPrintEnabled = Value
+        Log("Debug prints " .. (Value and "ENABLED" or "DISABLED"))
+    end
+})
+
+Tabs.Settings:AddButton({
+    Title = "Unload UI",
+    Description = "Close SevHubV3",
+    Callback = function()
+        Window:Destroy()
+    end
+})
+
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:SetLibrary(Fluent)
+
+-- 🔥 REQUIRED FOR AUTOLOAD
+InterfaceManager:SetFolder("SevHubV3")
+SaveManager:SetFolder("SevHubV3")
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({
+    "ThemeSelect",
+})
+
+-- build UI AFTER setup
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+-- 🔥 AUTOLOAD (this is what you were missing)
+task.spawn(function()
+    task.wait(1)
+    pcall(function()
+        SaveManager:LoadAutoloadConfig()
+    end)
+end)
+
+Window:SelectTab(1)
+
+Fluent:Notify({
+    Title = "SevHubV3",
+    Content = "Premium UI loaded successfully",
+    Duration = 5
+})
+
+Fluent:Notify({
+    Title = "AutoFarm",
+    Content = "Loaded",
+    Duration = 2
+})
+
+task.spawn(MainFarmLoop)
+------------------------------------------------
+-- C4 CONTROL
+------------------------------------------------
+
+VParts.ChildAdded:Connect(function(Projectile)
+
+	if not c4Enabled then return end
+	task.wait()
+
+	if Projectile.Name ~= "TransIgnore" then return end
+	if not me.Character then return end
+	if not me.Character:FindFirstChild("C4") then return end
+
+	local controlling = true
+
+	-- lock camera to C4
+	camera.CameraSubject = Projectile
+
+	local root = me.Character:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.Anchored = true
+	end
+
+	-- steering physics
+	local BV = Instance.new("BodyVelocity")
+	BV.MaxForce = Vector3.new(1e9,1e9,1e9)
+	BV.Parent = Projectile
+
+	local BG = Instance.new("BodyGyro")
+	BG.P = 9e4
+	BG.MaxTorque = Vector3.new(1e9,1e9,1e9)
+	BG.Parent = Projectile
+
+
+	while Projectile and Projectile.Parent and controlling do
+
+		RunService.RenderStepped:Wait()
+
+		if not c4Enabled then break end
+
+		-- stop when C4 gets anchored to surface
+		if Projectile.Anchored then
+			break
+		end
+
+		-- steer
+		BV.Velocity =
+			((camera.CFrame.LookVector * Forward) +
+			(camera.CFrame.RightVector * Sideways)) * c4Speed
+
+		BG.CFrame = camera.CFrame
+	end
+
+
+	-- remove our physics
+	if BV then BV:Destroy() end
+	if BG then BG:Destroy() end
+
+	-- restore camera
+	if me.Character then
+		local hum = me.Character:FindFirstChildOfClass("Humanoid")
+		if hum then
+			camera.CameraSubject = hum
+		end
+	end
+
+	-- restore movement
+	if root then
+		root.Anchored = false
+	end
+
+end)
+
+input.InputBegan:Connect(function(Key)
+
+    if Key.KeyCode == Enum.KeyCode.W then
+        Forward = 1
+
+    elseif Key.KeyCode == Enum.KeyCode.S then
+        Forward = -1
+
+    elseif Key.KeyCode == Enum.KeyCode.D then
+        Sideways = 1
+
+    elseif Key.KeyCode == Enum.KeyCode.A then
+        Sideways = -1
+    end
+
+end)
+
+input.InputEnded:Connect(function(Key)
+
+    if Key.KeyCode == Enum.KeyCode.W or Key.KeyCode == Enum.KeyCode.S then
+        Forward = 0
+
+    elseif Key.KeyCode == Enum.KeyCode.D or Key.KeyCode == Enum.KeyCode.A then
+        Sideways = 0
+    end
+
+end)
